@@ -30,7 +30,7 @@ if [[ "${java_specification_version}" != "25" ]]; then
   echo "Java 25 is required; found ${java_specification_version:-unknown}" >&2
   exit 1
 fi
-native_image_version=$(native-image --version 2>&1 | head -n 1)
+native_image_version=$(native-image --version 2>&1)
 if [[ ! "${native_image_version}" =~ (^|[[:space:]])25\. ]]; then
   echo "GraalVM Native Image 25 is required; found ${native_image_version:-unknown}" >&2
   exit 1
