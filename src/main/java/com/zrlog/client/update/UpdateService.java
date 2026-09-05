@@ -9,6 +9,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.AccessMode;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -83,6 +85,7 @@ public class UpdateService {
         }
         Manifest manifest = check(currentVersion);
         if (!manifest.updateAvailable()) return null;
+        checkUpdateDirectory(executable);
         Path directory = executable.getParent();
         Path temporary = null;
         try {
@@ -103,13 +106,34 @@ public class UpdateService {
             temporary = null;
             return executable;
         } catch (IOException e) {
-            throw new ApiException("Unable to replace zrlogctl: " + e.getMessage(), 8, e);
+            throw replacementFailure(executable, e);
         } finally {
             if (temporary != null) {
                 try { Files.deleteIfExists(temporary); }
                 catch (IOException ignored) { }
             }
         }
+    }
+
+    static void checkUpdateDirectory(Path executable) {
+        Path directory = executable.getParent();
+        try {
+            // Atomic replacement requires directory access, not write access to the old binary.
+            directory.getFileSystem().provider().checkAccess(directory, AccessMode.WRITE, AccessMode.EXECUTE);
+        } catch (IOException e) {
+            throw replacementFailure(executable, e);
+        }
+    }
+
+    static ApiException replacementFailure(Path executable, IOException cause) {
+        if (cause instanceof AccessDeniedException) {
+            String command = "sudo -- '" + executable.toString().replace("'", "'\\''") + "' update apply";
+            return new ApiException("Permission denied while updating zrlogctl at " + executable
+                    + ". Check write and search permissions on the installation directory " + executable.getParent()
+                    + ". For a system installation, retry with administrator privileges: " + command, 8, cause);
+        }
+        return new ApiException("Unable to replace zrlogctl at " + executable + ": "
+                + cause.getClass().getSimpleName() + ": " + cause.getMessage(), 8, cause);
     }
 
     private String readText(URI uri) {

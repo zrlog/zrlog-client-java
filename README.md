@@ -81,6 +81,10 @@ zrlogctl update apply
 
 更新只接受 `https://dl.zrlog.com/ctl/release/` 下的清单和二进制，校验文件大小与 SHA-256 后原子替换当前可执行文件。Jar/JVM 启动方式不能执行自更新。清单格式见 [docs/update-manifest.md](docs/update-manifest.md)。
 
+安装目录缺少写入或搜索权限时，`update apply` 会在下载更新包前报出 `Permission denied`、安装目录和管理员重试命令，退出码为 `8`。
+例如安装在 `/usr/local/bin/zrlogctl` 时，可运行 `sudo -- /usr/local/bin/zrlogctl update apply`。
+客户端不会自动提权或放宽目录权限；只读文件系统等其他 I/O 错误保留具体异常类型和原因。
+
 ## 退出码
 
 | 退出码 | 含义 |
