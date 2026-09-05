@@ -9,7 +9,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,13 +27,22 @@ public final class ContentFiles {
     private ContentFiles() { }
 
     public static ArticleSource loadArticle(Path path) {
+        return loadArticleDocument(path).article();
+    }
+
+    public static ArticleDocument loadArticleDocument(Path path) {
         String source = read(path);
         String normalized = source.replace("\r\n", "\n").replace('\r', '\n');
         if (!normalized.startsWith("---\n")) throw invalid(path, "must start with YAML front matter");
         int end = normalized.indexOf("\n---\n", 4);
         if (end < 0) throw invalid(path, "front matter is not closed");
         Object parsed = loadYaml(normalized.substring(4, end), path);
-        if (!(parsed instanceof Map<?, ?> metadata)) throw invalid(path, "front matter must be a YAML object");
+        if (!(parsed instanceof Map<?, ?> rawMetadata)) throw invalid(path, "front matter must be a YAML object");
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : rawMetadata.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) throw invalid(path, "front matter field names must be strings");
+            metadata.put(key, entry.getValue());
+        }
         String markdown = normalized.substring(end + 5).stripTrailing() + "\n";
         if (markdown.isBlank()) throw invalid(path, "article body is empty");
         String title = required(metadata, "title", path);
@@ -40,11 +51,12 @@ public final class ContentFiles {
         if (!alias.matches("[a-z0-9]+(?:-[a-z0-9]+)*")) {
             throw invalid(path, "alias must contain lowercase ASCII words separated by hyphens");
         }
-        return new ArticleSource(title, alias, category, markdown,
+        ArticleSource article = new ArticleSource(title, alias, category, markdown,
                 optionalString(metadata, "digest", path), optionalString(metadata, "thumbnail", path),
                 strings(metadata.get("keywords"), path), bool(metadata.get("canComment"), true, path, "canComment"),
                 bool(metadata.get("recommended"), false, path, "recommended"),
                 bool(metadata.get("privacy"), false, path, "privacy"));
+        return new ArticleDocument(article, Collections.unmodifiableMap(metadata));
     }
 
     public static List<Map<String, String>> loadCategories(Path path) {
@@ -73,6 +85,10 @@ public final class ContentFiles {
         } catch (IOException e) {
             throw new ApiException("Unable to read " + path + ": " + e.getMessage(), 3, e);
         }
+    }
+
+    static Object loadYaml(Path path) {
+        return loadYaml(read(path), path);
     }
 
     private static Object loadYaml(String source, Path path) {
@@ -129,4 +145,6 @@ public final class ContentFiles {
             throw invalid(path, field + " must be plain text without HTML or entities");
         }
     }
+
+    public record ArticleDocument(ArticleSource article, Map<String, Object> metadata) { }
 }

@@ -61,3 +61,29 @@ privacy: false
 ```
 
 每项必须包含 `alias` 和 `name`，`remark` 可为空。同步以 alias 查找分类：不存在时创建，名称或备注变化时更新，其余保持不变；不会删除文件中没有出现的远端分类。
+
+## 仓库策略
+
+内容仓库可以提供额外的 YAML 策略，并在离线检查时使用：
+
+```bash
+zrlogctl content check --policy docs/content-policy.yml content/*/*.md
+```
+
+策略支持内容根目录与 `<category>/<alias>.md` 路径一致性、分类文件引用、允许字段、必填字段类型、风格与分类映射、禁用短语、一级标题限制，以及准备发布时的独立审阅、有效日期和 HTTPS 来源检查。策略路径相对于策略文件自身解析，完整示例见 [examples/content-policy.yml](../examples/content-policy.yml)。
+
+策略字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `schemaVersion` | 当前固定为 `1` |
+| `contentRoot` | 相对于策略文件的文章根目录 |
+| `categoriesFile` | 相对于策略文件的分类 YAML |
+| `allowedFields` | 允许出现的全部 front matter 字段 |
+| `requiredFields` | 必填字段及其 `string`、`boolean` 或 `list` 类型 |
+| `styleProfiles` | `styleProfile` 值到允许分类的映射 |
+| `forbiddenPhrases` | 正文中不允许出现的精确短语 |
+| `forbidLevelOneHeading` | 是否禁止正文一级标题 |
+| `publication` | 准备发布、已审阅、核对日期、来源和私密字段的名称 |
+
+当 `publication.readyField` 指向的字段为 `true` 时，策略额外要求审阅字段为 `true`、文章不是私密内容、核对日期为有效的 `YYYY-MM-DD`，并且至少包含一个具有 `name` 和无凭据 HTTPS `url` 的来源。风格判断和事实真实性仍需 AI 与人工审阅，策略不会尝试自动推断。

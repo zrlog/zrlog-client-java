@@ -1,0 +1,42 @@
+schemaVersion: 1
+contentRoot: ../content
+categoriesFile: ../content/categories.yml
+
+allowedFields:
+  - title
+  - alias
+  - category
+  - styleProfile
+  - styleReviewed
+  - digest
+  - thumbnail
+  - keywords
+  - canComment
+  - recommended
+  - privacy
+  - publishReady
+  - verifiedAt
+  - sources
+
+requiredFields:
+  styleProfile: string
+  styleReviewed: boolean
+  publishReady: boolean
+  verifiedAt: string
+  sources: list
+
+styleProfiles:
+  release: [notes]
+  tutorial: [doc]
+  reference: [doc]
+  notice: [notes, doc]
+
+forbiddenPhrases: [首先, 其次, 综上所述]
+forbidLevelOneHeading: true
+
+publication:
+  readyField: publishReady
+  reviewedField: styleReviewed
+  verifiedAtField: verifiedAt
+  sourcesField: sources
+  privacyField: privacy

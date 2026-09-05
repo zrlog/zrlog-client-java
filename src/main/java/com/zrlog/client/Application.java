@@ -2,6 +2,7 @@ package com.zrlog.client;
 
 import com.zrlog.client.content.ArticleSource;
 import com.zrlog.client.content.ContentFiles;
+import com.zrlog.client.content.ContentPolicy;
 import com.zrlog.client.content.ContentService;
 import com.zrlog.client.model.Article;
 import com.zrlog.client.model.Category;
@@ -367,11 +368,15 @@ public class Application implements Runnable {
     @Command(name = "check", description = "Validate Markdown front matter without connecting to ZrLog")
     static class ContentCheck implements Callable<Integer> {
         @ParentCommand ContentGroup group;
+        @Option(names = "--policy", description = "Repository content policy YAML") Path policyFile;
         @Parameters(arity = "1..*") List<Path> files;
         public Integer call() {
+            ContentPolicy policy = policyFile == null ? null : ContentPolicy.load(policyFile);
             java.util.Set<String> aliases = new java.util.HashSet<>();
             List<Map<String, Object>> results = files.stream().map(path -> {
-                ArticleSource source = ContentFiles.loadArticle(path);
+                ContentFiles.ArticleDocument document = ContentFiles.loadArticleDocument(path);
+                ArticleSource source = document.article();
+                if (policy != null) policy.validate(path, document);
                 if (!aliases.add(source.alias())) {
                     throw new ApiException("Duplicate article alias " + source.alias(), 3, null, null);
                 }

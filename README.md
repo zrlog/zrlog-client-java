@@ -40,6 +40,8 @@ ZRLOG_ADMIN_TOKEN=ADMIN_TOKEN
 ```bash
 # 无需连接站点的本地检查
 zrlogctl content check content/doc/example.md
+# 仓库可选策略
+zrlogctl content check --policy docs/content-policy.yml content/*/*.md
 
 # 分类和文章
 zrlogctl category list
