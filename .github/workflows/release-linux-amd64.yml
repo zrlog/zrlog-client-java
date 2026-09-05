@@ -1,0 +1,59 @@
+name: Release Linux AMD64
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    env:
+      BUILD_NUMBER: ${{ github.run_number }}
+    concurrency:
+      group: deploy-zrlogctl-linux-amd64
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "25"
+          distribution: graalvm
+          cache: maven
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          native-image-job-reports: "true"
+      - name: Install native linker dependencies
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Build release tree
+        id: build
+        run: |
+          ./bin/package-linux-amd64.sh /tmp/zrlogctl-dist
+          echo "version=$(jq -r .version /tmp/zrlogctl-dist/ctl/release/latest.json)" >> "$GITHUB_OUTPUT"
+      - name: Attest release binary
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: /tmp/zrlogctl-dist/ctl/release/${{ steps.build.outputs.version }}/zrlogctl-linux-amd64
+      - name: Configure object storage
+        run: |
+          aws configure set aws_access_key_id "${{ secrets.SECRET_ID }}"
+          aws configure set aws_secret_access_key "${{ secrets.SECRET_KEY }}"
+          aws configure set region auto
+          aws configure set output json
+      - name: Upload immutable version
+        run: >-
+          aws s3 cp "/tmp/zrlogctl-dist/ctl/release/${{ steps.build.outputs.version }}"
+          "s3://${{ secrets.BUCKET }}/ctl/release/${{ steps.build.outputs.version }}/"
+          --recursive --checksum-algorithm CRC32 --endpoint-url "${{ secrets.HOST }}"
+      - name: Publish latest manifest
+        run: >-
+          aws s3 cp /tmp/zrlogctl-dist/ctl/release/latest.json
+          "s3://${{ secrets.BUCKET }}/ctl/release/latest.json"
+          --content-type application/json --cache-control no-cache
+          --endpoint-url "${{ secrets.HOST }}"
