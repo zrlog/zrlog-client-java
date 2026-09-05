@@ -3,6 +3,7 @@ package com.zrlog.client.content;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.zrlog.client.ApiException;
 import com.zrlog.client.ClientConfig;
 import com.zrlog.client.ZrLogApi;
 import com.zrlog.client.ZrLogHttpClient;
@@ -13,6 +14,8 @@ import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.net.URI;
@@ -115,12 +118,112 @@ class ContentServiceHttpTest {
         assertThrows(com.zrlog.client.ApiException.class, () -> service.publish(source()));
     }
 
-    private void enqueueWriteFlow(Article current, Article saved) {
+    @Test
+    void keepsAnEquivalentDraftWithRenderedHtmlWithoutWriting() {
+        enqueueReadFlow(article(true, 3, "Managed", "Body\n"));
+
+        ContentService.Result result = service.saveDraft(source(), null);
+
+        assertEquals("kept", result.action());
+        assertTrue(result.changedFields().isEmpty());
+        assertEquals(3, server.getRequestCount());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", " \n\t"})
+    void requiresARevisionTokenForAnEquivalentDraftMissingHtml(String content) {
+        enqueueReadFlow(article(true, 3, "Managed", "Body\n", content));
+
+        ApiException error = assertThrows(ApiException.class, () -> service.saveDraft(source(), null));
+
+        assertTrue(error.getMessage().contains("revision token"));
+        assertEquals(3, server.getRequestCount());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", " \n\t"})
+    void resubmitsEquivalentMarkdownWithATokenWhenHtmlIsMissing(String content) throws InterruptedException {
+        Article current = article(true, 3, "Managed", "Body\n", content);
+        enqueueWriteFlow(current, article(true, 4, "Managed", "Body\n"));
+
+        ContentService.Result result = service.saveDraft(source(), RevisionTokens.create(current, site));
+
+        assertEquals("updated", result.action());
+        assertEquals(List.of("content"), result.changedFields());
+        assertEquals("<p>Body</p>\n", result.article().content());
+        assertEquals(4, result.article().version());
+        assertWriteRequest(true, 3);
+        assertEquals(5, server.getRequestCount());
+    }
+
+    @Test
+    void rejectsAStaleTokenWhenRepairingMissingHtml() {
+        Article old = article(true, 2, "Managed", "Body\n", "");
+        enqueueReadFlow(article(true, 3, "Managed", "Body\n", ""));
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> service.saveDraft(source(), RevisionTokens.create(old, site)));
+
+        assertTrue(error.getMessage().contains("no longer matches"));
+        assertEquals(3, server.getRequestCount());
+    }
+
+    @Test
+    void doesNotRepairAPublishedArticleThroughTheDraftCommand() {
+        Article current = article(false, 3, "Managed", "Body\n", "");
+        enqueueReadFlow(current);
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> service.saveDraft(source(), RevisionTokens.create(current, site)));
+
+        assertTrue(error.getMessage().contains("Refusing to overwrite published"));
+        assertEquals(3, server.getRequestCount());
+    }
+
+    @Test
+    void reportsMissingHtmlAfterResubmissionWithoutRetryingTheWrite() throws InterruptedException {
+        Article current = article(true, 3, "Managed", "Body\n", "");
+        enqueueWriteFlow(current, article(true, 4, "Managed", "Body\n", ""));
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> service.saveDraft(source(), RevisionTokens.create(current, site)));
+
+        assertEquals("Server did not render Markdown content", error.getMessage());
+        assertWriteRequest(true, 3);
+        assertEquals(5, server.getRequestCount());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void verificationRejectsEquivalentMarkdownWithoutHtml(boolean draft) {
+        enqueueReadFlow(article(draft, 3, "Managed", "Body\n", ""));
+
+        ApiException error = assertThrows(ApiException.class,
+                () -> service.verify(source(), draft ? "draft" : "published"));
+
+        assertEquals("Server did not render Markdown content", error.getMessage());
+        assertEquals(3, server.getRequestCount());
+    }
+
+    @Test
+    void verificationAcceptsEquivalentMarkdownWithRenderedHtml() {
+        enqueueReadFlow(article(true, 3, "Managed", "Body\n"));
+
+        assertEquals("verified", service.verify(source(), "draft").action());
+        assertEquals(3, server.getRequestCount());
+    }
+
+    private void enqueueReadFlow(Article current) {
         Gson gson = new Gson();
         server.enqueue(json("{\"error\":0,\"data\":{\"rows\":[{\"typeId\":2,\"alias\":\"doc\",\"typeName\":\"Docs\",\"remark\":\"\"}]}}"));
         server.enqueue(json("{\"error\":0,\"data\":{\"page\":1,\"size\":100,\"totalElements\":1,\"rows\":["
                 + gson.toJson(current) + "]}}"));
         server.enqueue(articleResponse(gson, current));
+    }
+
+    private void enqueueWriteFlow(Article current, Article saved) {
+        enqueueReadFlow(current);
+        Gson gson = new Gson();
         server.enqueue(articleResponse(gson, saved));
         server.enqueue(articleResponse(gson, saved));
     }
@@ -157,7 +260,11 @@ class ContentServiceHttpTest {
     }
 
     private static Article article(boolean draft, int version, String title, String markdown) {
-        return new Article(42, version, title, "managed", markdown, "<p>Body</p>\n", "Digest",
+        return article(draft, version, title, markdown, "<p>Body</p>\n");
+    }
+
+    private static Article article(boolean draft, int version, String title, String markdown, String content) {
+        return new Article(42, version, title, "managed", markdown, content, "Digest",
                 "ZrLog,AI", 2, "doc", "", true, false, false, draft,
                 "markdown", "/admin/article-edit?id=42");
     }

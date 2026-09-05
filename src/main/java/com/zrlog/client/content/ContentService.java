@@ -30,6 +30,7 @@ public class ContentService {
         }
         Article current = api.getArticle(matches.getFirst().id());
         List<String> differences = differences(current, source, category, "draft");
+        if (current.content().isBlank()) differences.add("content");
         if (differences.isEmpty()) return new Result("kept", current, List.of());
         if (!"draft".equals(current.status())) {
             throw conflict("Refusing to overwrite " + current.status() + " article " + source.alias());
@@ -77,6 +78,7 @@ public class ContentService {
         Category category = api.category(source.category());
         Article current = uniqueDetail(source.alias());
         assertMatches(current, source, category, status);
+        assertRenderedContent(current);
         return new Result("verified", current, List.of());
     }
 
@@ -113,8 +115,12 @@ public class ContentService {
     private Article verifySaved(Article saved, ArticleSource source, Category category, String status) {
         Article reread = api.getArticle(saved.id());
         assertMatches(reread, source, category, status);
-        if (reread.content().isBlank()) throw conflict("Server did not render Markdown content");
+        assertRenderedContent(reread);
         return reread;
+    }
+
+    private static void assertRenderedContent(Article article) {
+        if (article.content().isBlank()) throw conflict("Server did not render Markdown content");
     }
 
     private void assertMatches(Article article, ArticleSource source, Category category, String status) {

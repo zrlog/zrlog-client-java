@@ -47,6 +47,20 @@ privacy: false
 
 正文换行统一为 LF，文件末尾统一保留一个换行。客户端发送 `editorType=markdown` 和 Markdown 原文，不在本地生成 HTML；ZrLog 服务端负责生成 `content`，写入后客户端会回读并确认 HTML 非空。
 
+已有草稿的 Markdown 和元数据一致，但 `content` 为空或仅含空白时，`draft` 不会返回 `kept`。
+回读并确认目标草稿后，生成修订令牌重新提交，由服务端补齐 HTML：
+
+```bash
+zrlogctl article get manage-with-zrlogctl --output json
+TOKEN=$(zrlogctl article revision-token content/doc/manage-with-zrlogctl.md --status draft)
+zrlogctl article draft content/doc/manage-with-zrlogctl.md --revision-token "$TOKEN"
+zrlogctl article verify content/doc/manage-with-zrlogctl.md --status draft
+```
+
+每条命令成功后再执行下一条。重新提交仍受远端快照和版本保护，不会修改已发布文章的状态。
+`verify` 也会拒绝空 HTML。若服务端仍未生成正文，写入后回读会报错；此时草稿版本可能已经递增，
+应先回读排查服务端渲染能力，不要自动重复覆盖。
+
 ## 分类
 
 分类同步文件是 YAML 列表：
