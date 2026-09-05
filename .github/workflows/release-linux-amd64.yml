@@ -51,6 +51,12 @@ jobs:
           aws s3 cp "/tmp/zrlogctl-dist/ctl/release/${{ steps.build.outputs.version }}"
           "s3://${{ secrets.BUCKET }}/ctl/release/${{ steps.build.outputs.version }}/"
           --recursive --checksum-algorithm CRC32 --endpoint-url "${{ secrets.HOST }}"
+      - name: Publish installer
+        run: >-
+          aws s3 cp /tmp/zrlogctl-dist/ctl/install.sh
+          "s3://${{ secrets.BUCKET }}/ctl/install.sh"
+          --content-type text/x-shellscript --cache-control no-cache
+          --endpoint-url "${{ secrets.HOST }}"
       - name: Publish latest manifest
         run: >-
           aws s3 cp /tmp/zrlogctl-dist/ctl/release/latest.json

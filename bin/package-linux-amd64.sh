@@ -60,6 +60,7 @@ binary_name=zrlogctl-linux-amd64
 
 mkdir -p "${version_root}"
 install -m 755 target/zrlogctl "${version_root}/${binary_name}"
+install -m 755 bin/install.sh "${output_root%/}/ctl/install.sh"
 (
   cd "${version_root}"
   sha256sum "${binary_name}" > "${binary_name}.sha256"

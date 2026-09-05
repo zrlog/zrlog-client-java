@@ -4,17 +4,13 @@
 
 ## 安装
 
-稳定版从 `dl.zrlog.com` 下载：
+稳定版通过安装脚本下载、校验并安装到 `/usr/local/bin/zrlogctl`：
 
 ```bash
-curl -fLO https://dl.zrlog.com/ctl/release/0.1.0/zrlogctl-linux-amd64
-curl -fLO https://dl.zrlog.com/ctl/release/0.1.0/zrlogctl-linux-amd64.sha256
-sha256sum -c zrlogctl-linux-amd64.sha256
-chmod 755 zrlogctl-linux-amd64
-sudo install -m 755 zrlogctl-linux-amd64 /usr/local/bin/zrlogctl
+curl -fsSL https://dl.zrlog.com/ctl/install.sh | sh
 ```
 
-实际版本以 <https://dl.zrlog.com/ctl/release/latest.json> 为准。
+安装脚本只接受 <https://dl.zrlog.com/ctl/release/latest.json> 声明的固定下载路径，并校验文件大小与 SHA-256。非 root 用户通过 `sudo` 完成最终安装。
 
 ## 鉴权
 
