@@ -54,8 +54,8 @@ jobs:
       - name: Publish installer
         run: >-
           aws s3 cp /tmp/zrlogctl-dist/ctl/install.sh
-          "s3://${{ secrets.BUCKET }}/ctl/install.sh"
-          --content-type text/x-shellscript --cache-control no-cache
+          "s3://${{ secrets.BUCKET }}/ctl/install"
+          --content-type "text/plain; charset=utf-8" --cache-control no-cache
           --endpoint-url "${{ secrets.HOST }}"
       - name: Publish latest manifest
         run: >-

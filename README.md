@@ -7,7 +7,7 @@
 稳定版通过安装脚本下载、校验并安装到 `/usr/local/bin/zrlogctl`：
 
 ```bash
-curl -fsSL https://dl.zrlog.com/ctl/install.sh | sh
+curl -fsSL https://dl.zrlog.com/ctl/install | sh
 ```
 
 安装脚本只接受 <https://dl.zrlog.com/ctl/release/latest.json> 声明的固定下载路径，并校验文件大小与 SHA-256。非 root 用户通过 `sudo` 完成最终安装。
