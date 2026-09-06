@@ -64,6 +64,15 @@ zrlogctl article revise content/doc/example.md --revision-token "$TOKEN"
 # 上传图片
 zrlogctl media upload media/cover.webp --dir image/articles
 
+# 上传主题 ZIP；文件名去掉 .zip 后作为主题标识
+zrlogctl theme upload template-travel.zip
+
+# 直接上传主题目录；目录名作为主题标识，客户端负责压缩
+zrlogctl theme upload template-travel
+
+# 明确确认覆盖已有的非内置主题
+zrlogctl theme upload template-travel.zip --overwrite
+
 # 适合 AI 和脚本的 JSON 输出；全局参数也可以放在子命令之后
 zrlogctl article list --output json
 ```
@@ -71,6 +80,8 @@ zrlogctl article list --output json
 `draft` 不会覆盖内容不同的草稿，也不会把已发布文章静默转为草稿。覆盖草稿或修订已发布文章需要绑定当前完整远端快照的 revision token。ZrLog 的文章 `version` 字段仍作为最终并发保护。
 
 完整 front matter 约定见 [docs/content-format.md](docs/content-format.md)，示例位于 [examples](examples)。AI 写作风格、语料审阅和发布证据属于具体内容工程，不由 `zrlogctl` 强制。
+
+主题上传支持 ZIP 文件或主题目录。ZIP 文件名或目录名会作为主题标识，必须以字母或数字开头，后续只能使用字母、数字、点、下划线和连字符，最长 128 个字符。目录模式由客户端在本地压缩，主题文件直接位于 ZIP 根目录；客户端不会跟随符号链接，并默认排除 `.git`、`.svn`、`.hg`、`.bzr`、`.idea`、`.vscode`、`.cache`、`node_modules`、`.env*`、凭据/密钥、数据库、日志和转储文件。ZIP 可以直接包含主题文件，也可以包含一个外层目录；主题包至少应包含 `template.properties` 和入口模板。`template-travel` 示例中的 `template.properties`、`index.ftl`、`page.ftl` 和 `detail.ftl` 可作为主题包结构参考。上传不会自动切换当前主题，覆盖已有主题必须显式传入 `--overwrite`。
 
 ## 自更新
 

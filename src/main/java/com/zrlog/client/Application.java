@@ -6,6 +6,7 @@ import com.zrlog.client.content.ContentPolicy;
 import com.zrlog.client.content.ContentService;
 import com.zrlog.client.model.Article;
 import com.zrlog.client.model.Category;
+import com.zrlog.client.model.Theme;
 import com.zrlog.client.update.UpdateService;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -26,7 +27,8 @@ import java.util.concurrent.Callable;
 @Command(name = "zrlogctl", mixinStandardHelpOptions = true, versionProvider = BuildInfo.class,
         description = "Non-graphical ZrLog administration for automation and AI agents.",
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class,
-                Application.MediaGroup.class, Application.ContentGroup.class, Application.UpdateGroup.class})
+                Application.MediaGroup.class, Application.ThemeGroup.class,
+                Application.ContentGroup.class, Application.UpdateGroup.class})
 public class Application implements Runnable {
 
     @Option(names = "--site", scope = CommandLine.ScopeType.INHERIT,
@@ -355,6 +357,25 @@ public class Application implements Runnable {
         public Integer call() {
             String url = group.root.api().upload(file, directory);
             group.root.emit(Map.of("url", url), url);
+            return 0;
+        }
+    }
+
+    @Command(name = "theme", description = "Manage ZrLog themes", subcommands = ThemeUpload.class)
+    static class ThemeGroup implements Runnable {
+        @ParentCommand Application root;
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+
+    @Command(name = "upload", description = "Upload or replace a ZIP package or theme directory")
+    static class ThemeUpload implements Callable<Integer> {
+        @ParentCommand ThemeGroup group;
+        @Parameters(index = "0", description = "ZIP theme package or theme directory") Path file;
+        @Option(names = "--overwrite", description = "Replace an existing non-built-in theme") boolean overwrite;
+        public Integer call() {
+            Theme theme = group.root.api().uploadTheme(file, overwrite);
+            group.root.emit(theme, "uploaded theme " + theme.shortTemplate()
+                    + (theme.overwritten() ? " (overwritten)" : ""));
             return 0;
         }
     }

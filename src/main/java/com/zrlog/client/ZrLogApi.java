@@ -6,17 +6,20 @@ import com.google.gson.JsonObject;
 import com.zrlog.client.content.ArticleSource;
 import com.zrlog.client.model.Article;
 import com.zrlog.client.model.Category;
+import com.zrlog.client.model.Theme;
 
 import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.HashSet;
 import java.util.Set;
 
 public class ZrLogApi {
@@ -116,6 +119,70 @@ public class ZrLogApi {
             return url;
         } catch (IOException e) {
             throw new ApiException("Unable to read upload file: " + e.getMessage(), 3, e);
+        }
+    }
+
+    public Theme uploadTheme(Path source, boolean overwrite) {
+        if (source == null) throw new ApiException("Theme source is required", 3, null, null);
+        if (Files.isSymbolicLink(source)) {
+            throw new ApiException("Theme source must not be a symbolic link", 3, null, null);
+        }
+        boolean directory = Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS);
+        String sourceName = source.getFileName() == null ? "" : source.getFileName().toString();
+        String shortTemplate = directory ? sourceName : zipName(sourceName);
+        validateThemeName(shortTemplate);
+        Path archive = source;
+        String uploadName = sourceName;
+        try {
+            if (directory) {
+                archive = ThemeArchive.create(source);
+                uploadName = shortTemplate + ".zip";
+            } else if (!Files.isRegularFile(source)) {
+                throw new ApiException("Theme source must be a regular file or directory", 3, null, null);
+            }
+            byte[] bytes = Files.readAllBytes(archive);
+            if (bytes.length == 0) throw new ApiException("Theme package must not be empty", 3, null, null);
+            String path = "/api/admin/template/upload?shortTemplate="
+                    + URLEncoder.encode(shortTemplate, StandardCharsets.UTF_8)
+                    + "&overwrite=" + overwrite;
+            JsonObject result = data(http.upload(path, "file", uploadName, "application/zip", bytes));
+            if (!result.has("shortTemplate") || JsonSupport.string(result, "shortTemplate", "").isBlank()) {
+                throw protocol("Theme upload response has no data.shortTemplate");
+            }
+            if (!result.has("name") || JsonSupport.string(result, "name", "").isBlank()) {
+                throw protocol("Theme upload response has no data.name");
+            }
+            if (!result.has("overwritten")) throw protocol("Theme upload response has no data.overwritten");
+            return new Theme(JsonSupport.string(result, "shortTemplate", ""),
+                    JsonSupport.string(result, "name", ""),
+                    JsonSupport.string(result, "version", null),
+                    JsonSupport.bool(result, "overwritten"));
+        } catch (IOException e) {
+            throw new ApiException("Unable to package or read theme source: " + e.getMessage(), 3, e);
+        } finally {
+            if (directory && archive != source) {
+                try {
+                    Files.deleteIfExists(archive);
+                } catch (IOException ignored) {
+                    // The temporary archive is not part of the uploaded theme.
+                }
+            }
+        }
+    }
+
+    public Theme uploadTheme(Path file) { return uploadTheme(file, false); }
+
+    private static String zipName(String fileName) {
+        String lowerName = fileName.toLowerCase(Locale.ROOT);
+        if (!lowerName.endsWith(".zip") || fileName.length() == 4) {
+            throw new ApiException("Theme source must be a .zip file or a theme directory", 3, null, null);
+        }
+        return fileName.substring(0, fileName.length() - 4);
+    }
+
+    private static void validateThemeName(String shortTemplate) {
+        if (!shortTemplate.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")) {
+            throw new ApiException("Theme name must contain only letters, numbers, dots, underscores, and hyphens", 3, null, null);
         }
     }
 

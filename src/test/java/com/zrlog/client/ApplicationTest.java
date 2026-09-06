@@ -196,6 +196,29 @@ class ApplicationTest {
         }
     }
 
+    @Test
+    void uploadsThemeFromTheThemeCommand() throws Exception {
+        Path theme = temporary.resolve("template-travel.zip");
+        Files.write(theme, new byte[]{'P', 'K', 3, 4});
+        MockWebServer server = new MockWebServer();
+        server.start();
+        try {
+            server.enqueue(json("{\"error\":0,\"data\":{\"shortTemplate\":\"template-travel\","
+                    + "\"name\":\"Travel Journal\",\"overwritten\":false}}"));
+            Application application = new Application();
+            application.site = server.url("/").toString();
+            application.tokenFile = ownerOnlyToken();
+
+            assertEquals(0, Application.commandLine(application).execute(
+                    "theme", "upload", theme.toString(), "--output", "json"));
+
+            assertEquals("/api/admin/template/upload?shortTemplate=template-travel&overwrite=false",
+                    server.takeRequest().getPath());
+        } finally {
+            server.shutdown();
+        }
+    }
+
     private Path ownerOnlyToken() throws Exception {
         Path token = temporary.resolve("owner-token");
         Files.writeString(token, "secret\n");
