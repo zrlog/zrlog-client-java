@@ -39,6 +39,7 @@ class ZrLogHttpClientTest {
 
         var request = server.takeRequest();
         assertEquals("/sub/api/admin/test", request.getPath());
+        assertEquals("zrlogctl/" + BuildInfo.VERSION, request.getHeader("User-Agent"));
         assertEquals("secret-token", request.getHeader("X-ZrLog-Admin-Token"));
         assertEquals(true, result.getAsJsonObject("data").get("ok").getAsBoolean());
     }

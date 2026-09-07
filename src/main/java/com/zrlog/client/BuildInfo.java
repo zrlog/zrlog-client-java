@@ -9,6 +9,7 @@ import java.util.Properties;
 public final class BuildInfo implements CommandLine.IVersionProvider {
 
     public static final String VERSION = loadVersion();
+    public static final String USER_AGENT = "zrlogctl/" + VERSION;
 
     @Override
     public String[] getVersion() { return new String[]{"zrlogctl " + VERSION}; }

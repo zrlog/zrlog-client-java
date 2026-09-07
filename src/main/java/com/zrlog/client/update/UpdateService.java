@@ -2,6 +2,7 @@ package com.zrlog.client.update;
 
 import com.google.gson.JsonObject;
 import com.zrlog.client.ApiException;
+import com.zrlog.client.BuildInfo;
 import com.zrlog.client.JsonSupport;
 
 import java.io.IOException;
@@ -142,8 +143,7 @@ public class UpdateService {
 
     private byte[] readBytes(URI uri) {
         try {
-            HttpResponse<byte[]> response = client.send(HttpRequest.newBuilder(validateUri(uri))
-                    .timeout(Duration.ofSeconds(60)).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> response = client.send(downloadRequest(uri), HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() != 200) {
                 throw new ApiException("Update download failed with HTTP " + response.statusCode(), 8,
                         response.statusCode(), null);
@@ -155,6 +155,13 @@ public class UpdateService {
         } catch (IOException e) {
             throw new ApiException("Unable to download update: " + e.getMessage(), 8, e);
         }
+    }
+
+    static HttpRequest downloadRequest(URI uri) {
+        return HttpRequest.newBuilder(validateUri(uri))
+                .timeout(Duration.ofSeconds(60))
+                .header("User-Agent", BuildInfo.USER_AGENT)
+                .GET().build();
     }
 
     private static URI validateUri(URI uri) {

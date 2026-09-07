@@ -55,6 +55,7 @@ public class ZrLogHttpClient {
         HttpRequest.Builder builder = HttpRequest.newBuilder(config.resolve(path))
                 .timeout(config.timeout())
                 .header("Accept", "application/json")
+                .header("User-Agent", BuildInfo.USER_AGENT)
                 .header("X-ZrLog-Admin-Token", config.token())
                 .method(method, body);
         if (contentType != null) builder.header("Content-Type", contentType);

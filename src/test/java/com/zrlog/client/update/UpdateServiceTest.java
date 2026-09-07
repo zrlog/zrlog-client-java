@@ -1,12 +1,14 @@
 package com.zrlog.client.update;
 
 import com.zrlog.client.ApiException;
+import com.zrlog.client.BuildInfo;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
@@ -121,6 +123,13 @@ class UpdateServiceTest {
                 URI.create("https://dl.zrlog.com/ctl/release/%2e%2e/other.json"), HttpClient.newHttpClient()));
         assertThrows(ApiException.class, () -> new UpdateService(
                 URI.create("https://dl.zrlog.com:8443/ctl/release/latest.json"), HttpClient.newHttpClient()));
+    }
+
+    @Test
+    void identifiesUpdateDownloadsAsZrLogCtl() {
+        HttpRequest request = UpdateService.downloadRequest(UpdateService.DEFAULT_MANIFEST);
+
+        assertEquals(BuildInfo.USER_AGENT, request.headers().firstValue("User-Agent").orElseThrow());
     }
 
     @Test
