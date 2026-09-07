@@ -67,12 +67,12 @@ class ZrLogApiTest {
     void uploadsImagesAsMultipartWithTheRequestedDirectory() throws Exception {
         Path image = temporary.resolve("cover.webp");
         Files.write(image, new byte[]{1, 2, 3, 4});
-        server.enqueue(json("{\"error\":0,\"data\":{\"url\":\"/upload/cover.webp\"}}"));
+        server.enqueue(json("{\"error\":0,\"data\":{\"url\":\"/attached/guides/example/cover.webp?h=-1&w=-1\"}}"));
 
-        assertEquals("/upload/cover.webp", api.upload(image, "image/guides"));
+        assertEquals("/attached/guides/example/cover.webp?h=-1&w=-1", api.upload(image, "guides/example"));
 
         var request = server.takeRequest();
-        assertEquals("/api/admin/upload?dir=image%2Fguides", request.getPath());
+        assertEquals("/api/admin/upload/thumbnail?dir=guides%2Fexample", request.getPath());
         assertTrue(request.getHeader("Content-Type").startsWith("multipart/form-data; boundary="));
         String body = request.getBody().readUtf8();
         assertTrue(body.contains("name=\"imgFile\"; filename=\"cover.webp\""));

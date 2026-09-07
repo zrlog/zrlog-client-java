@@ -112,7 +112,7 @@ public class ZrLogApi {
         try {
             byte[] bytes = Files.readAllBytes(file);
             if (bytes.length == 0) throw new ApiException("Upload source must not be empty", 3, null, null);
-            String path = "/api/admin/upload?dir=" + URLEncoder.encode(directory, StandardCharsets.UTF_8);
+            String path = "/api/admin/upload/thumbnail?dir=" + URLEncoder.encode(directory, StandardCharsets.UTF_8);
             JsonObject result = data(http.upload(path, "imgFile", name, mediaType, bytes));
             String url = JsonSupport.string(result, "url", "");
             if (url.isBlank()) throw protocol("Upload response has no data.url");

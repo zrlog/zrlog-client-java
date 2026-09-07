@@ -61,8 +61,8 @@ zrlogctl article verify content/doc/example.md --status published
 TOKEN=$(zrlogctl article revision-token content/doc/example.md --status published)
 zrlogctl article revise content/doc/example.md --revision-token "$TOKEN"
 
-# 上传图片
-zrlogctl media upload media/cover.webp --dir image/articles
+# 上传图片；客户端原样使用服务端返回的 /attached/... 路径
+zrlogctl media upload media/cover.webp --dir guides/example
 
 # 上传主题 ZIP；文件名去掉 .zip 后作为主题标识
 zrlogctl theme upload template-travel.zip
