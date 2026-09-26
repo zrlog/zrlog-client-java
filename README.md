@@ -30,7 +30,7 @@ zrlogctl logout
 
 凭证按站点保存到 `$XDG_CONFIG_HOME/zrlog/credentials/`（默认 `~/.config/zrlog/credentials/`），文件权限为 `0600`。并发进程通过文件锁串行刷新。`logout` 先撤销服务端授权，再删除该站点本机凭证；不会打印明文凭证。使用服务端配置的规范站点地址，包含部署 context path。
 
-博客与后台分域部署时，`--site` 填实际后端地址，例如 `https://xiaochun-admin.zrlog.com`。服务端使用 `ZRLOG_BACKEND_URL` 配置同一个公开地址，避免 OAuth 发现和回调校验使用静态博客域名。
+博客与后台分域部署时，`--site` 填服务的对外入口，例如 `https://xiaochun-admin.zrlog.com`，并在“设置 → 管理设置 → 后端服务地址”保存同一个地址，避免 OAuth 发现和回调校验使用静态博客域名。配置字段 `backend_server_url` 不进入博客公开数据；连接客户端仍需要知道服务入口，应填写代理地址而非内部源站。未填写时继续兼容 `ZRLOG_BACKEND_URL` 环境变量。
 
 脚本也可使用个人访问令牌。配置优先级：命令行 > 环境变量 > 当前目录 `.env` > 浏览器登录凭证。支持 `ZRLOG_SITE_URL`、`ZRLOG_ACCESS_TOKEN` 和兼容的 `ZRLOG_ADMIN_TOKEN`；同一层级优先使用 ACCESS_TOKEN，环境变量始终优先于 `.env`。
 
