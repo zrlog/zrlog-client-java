@@ -2,6 +2,7 @@ package com.zrlog.client;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.zrlog.client.auth.OAuthLogin;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.Set;
 import java.util.Map;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -230,34 +232,117 @@ class ApplicationTest {
     private static MockResponse json(String body) {
         return new MockResponse().setBody(body).addHeader("Content-Type", "application/json");
     }
-    @Test void browserLoginRefreshApiAndLogoutNeedNoManuallyEnteredToken() throws Exception {
+    @Test void browserLoginRemembersSiteAcrossCommandsAndWorkingDirectories() throws Exception {
         try (MockWebServer server = new MockWebServer()) {
             server.start();
             server.enqueue(new MockResponse().setBody("{\"access_token\":\"" + "a".repeat(43) + "\",\"refresh_token\":\"" + "r".repeat(43) + "\",\"token_type\":\"Bearer\",\"expires_in\":1,\"scope\":\"account:inherit offline_access\"}"));
-            Application app = new Application(); app.environment=Map.of(); app.dotenvPath=temporary.resolve("missing.env");
-            app.credentialDirectory=temporary.resolve("credentials"); app.site=server.url("/sub").toString();
-            app.browser=uri->{
-                var query=com.zrlog.client.auth.OAuthLogin.parameters(uri.getRawQuery());
-                try {
-                    String callback=query.get("redirect_uri")+"?"+com.zrlog.client.auth.OAuthLogin.form(Map.of("state",query.get("state"),"iss",app.site,"code","c".repeat(43)));
-                    java.net.http.HttpClient.newHttpClient().send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(callback)).GET().build(),java.net.http.HttpResponse.BodyHandlers.discarding());
-                } catch(Exception e) { throw new RuntimeException(e); }
-            };
-            assertEquals(0,Application.commandLine(app).execute("login"));
+            Application app = isolatedApplication("project");
+            authorizeInBrowser(app, server.url("/sub").toString(), false);
+            assertEquals(0,Application.commandLine(app).execute("login", "--site", server.url("/sub/").toString()));
             assertEquals("/sub/oauth/token",server.takeRequest().getPath());
+            Path defaultSite = temporary.resolve("config/zrlog/default-site");
+            assertEquals(server.url("/sub").toString(), Files.readString(defaultSite).trim());
+            assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+                    Files.getPosixFilePermissions(defaultSite));
             server.enqueue(new MockResponse().setBody("{\"access_token\":\"" + "b".repeat(43) + "\",\"refresh_token\":\"" + "s".repeat(43) + "\",\"token_type\":\"Bearer\",\"expires_in\":600,\"scope\":\"account:inherit offline_access\"}"));
-            server.enqueue(new MockResponse().setBody("{\"error\":0,\"data\":{\"rows\":[]}}"));
-            assertTrue(app.api().listCategories().isEmpty());
+            server.enqueue(json("{\"error\":0,\"data\":{\"rows\":[],\"page\":1,\"size\":100,\"totalElements\":0}}"));
+            assertEquals(0, Application.commandLine(isolatedApplication("tmp")).execute("article", "list"));
             var refresh=server.takeRequest(); assertEquals("/sub/oauth/token",refresh.getPath());
             assertTrue(refresh.getBody().readUtf8().contains("grant_type=refresh_token"));
-            var api=server.takeRequest(); assertEquals("/sub/api/admin/article-type",api.getPath());
+            var api=server.takeRequest(); assertEquals("/sub/api/admin/article?page=1&size=100&sort=id%2Cdesc",api.getPath());
             assertEquals("Bearer "+"b".repeat(43),api.getHeader("Authorization"));
             assertEquals(null,api.getHeader("X-ZrLog-Admin-Token"));
             server.enqueue(new MockResponse().setBody("{}"));
-            assertEquals(0,Application.commandLine(app).execute("logout"));
+            assertEquals(0,Application.commandLine(isolatedApplication("another-directory")).execute("logout"));
             assertEquals("/sub/oauth/revoke",server.takeRequest().getPath());
-            assertThrows(ApiException.class,app::api);
+            assertTrue(Files.notExists(defaultSite));
+            assertEquals(3, assertThrows(ApiException.class, isolatedApplication("tmp")::api).exitCode());
+            Application signedOut = isolatedApplication("tmp");
+            signedOut.site = server.url("/sub").toString();
+            assertEquals(4, assertThrows(ApiException.class, signedOut::api).exitCode());
         }
+    }
+
+    @Test void explicitSiteConfigurationOverridesSavedDefaultWithoutChangingIt() throws Exception {
+        SiteConfig saved = new SiteConfig(temporary.resolve("config/zrlog"));
+        saved.saveDefaultSite("https://saved.example/sub");
+        Path dotenv = temporary.resolve(".env");
+        Files.writeString(dotenv, "ZRLOG_SITE_URL=https://dotenv.example/sub\n");
+        for (String source : List.of("saved", "dotenv", "environment", "command")) {
+            Application app = isolatedApplication("tmp");
+            app.tokenValue = "test-token";
+            if (!source.equals("saved")) app.dotenvPath = dotenv;
+            if (source.equals("environment") || source.equals("command"))
+                app.environment = Map.of("XDG_CONFIG_HOME", temporary.resolve("config").toString(),
+                        "ZRLOG_SITE_URL", "https://environment.example/sub");
+            if (source.equals("command")) app.site = "https://command.example/sub";
+            assertEquals("https://" + source + ".example/sub", app.api().http().config().baseUri().toString());
+            assertEquals("https://saved.example/sub", saved.defaultSite());
+        }
+    }
+
+    @Test void loginSwitchesDefaultAndLoggingOutAnotherSitePreservesIt() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            SiteConfig saved = new SiteConfig(temporary.resolve("config/zrlog"));
+            for (String path : List.of("/first", "/second")) {
+                Application app = isolatedApplication("project");
+                String issuer = server.url(path).toString();
+                authorizeInBrowser(app, issuer, false);
+                server.enqueue(json("{\"access_token\":\"" + "a".repeat(43) + "\",\"token_type\":\"Bearer\",\"expires_in\":600}"));
+                assertEquals(0, Application.commandLine(app).execute("login", "--site", issuer));
+                assertEquals(path + "/oauth/token", server.takeRequest().getPath());
+                assertEquals(issuer, saved.defaultSite());
+            }
+            server.enqueue(json("{}"));
+            assertEquals(0, Application.commandLine(isolatedApplication("tmp")).execute(
+                    "logout", "--site", server.url("/first").toString()));
+            assertEquals("/first/oauth/revoke", server.takeRequest().getPath());
+            assertEquals(server.url("/second").toString(), saved.defaultSite());
+
+            server.enqueue(new MockResponse().setResponseCode(503));
+            assertEquals(4, Application.commandLine(isolatedApplication("tmp")).execute("logout"));
+            assertEquals("/second/oauth/revoke", server.takeRequest().getPath());
+            assertEquals(server.url("/second").toString(), saved.defaultSite());
+            assertEquals("a".repeat(43), isolatedApplication("tmp").api().http().config().token());
+        }
+    }
+
+    @Test void deniedLoginDoesNotCreateOrReplaceDefaultSite() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            SiteConfig saved = new SiteConfig(temporary.resolve("config/zrlog"));
+            for (boolean existing : List.of(false, true)) {
+                if (existing) saved.saveDefaultSite("https://saved.example");
+                Application app = isolatedApplication("project");
+                authorizeInBrowser(app, server.url("/sub").toString(), true);
+                assertEquals(4, Application.commandLine(app).execute("login", "--site", server.url("/sub").toString()));
+                assertEquals(existing ? "https://saved.example" : null, saved.defaultSite());
+            }
+            assertEquals(0, server.getRequestCount());
+        }
+    }
+
+    private Application isolatedApplication(String workingDirectory) {
+        Application app = new Application();
+        app.environment = Map.of("XDG_CONFIG_HOME", temporary.resolve("config").toString());
+        app.dotenvPath = temporary.resolve(workingDirectory).resolve(".env");
+        return app;
+    }
+
+    private static void authorizeInBrowser(Application app, String issuer, boolean denied) {
+        app.browser = uri -> {
+            var query = OAuthLogin.parameters(uri.getRawQuery());
+            try {
+                String callback = query.get("redirect_uri") + "?" + OAuthLogin.form(Map.of(
+                        "state", query.get("state"), "iss", issuer,
+                        denied ? "error" : "code", denied ? "access_denied" : "c".repeat(43)));
+                var response = java.net.http.HttpClient.newHttpClient().send(
+                        java.net.http.HttpRequest.newBuilder(java.net.URI.create(callback)).GET().build(),
+                        java.net.http.HttpResponse.BodyHandlers.discarding());
+                assertEquals(200, response.statusCode());
+            } catch (Exception e) { throw new RuntimeException(e); }
+        };
     }
     @Test void accessTokenEnvironmentUsesBearerAndKeepsEnvironmentAboveDotenv() throws Exception {
         Files.writeString(temporary.resolve(".env"),"ZRLOG_ACCESS_TOKEN=dotenv-access\n");

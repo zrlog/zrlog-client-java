@@ -36,7 +36,7 @@ import java.util.concurrent.Callable;
 public class Application implements Runnable {
 
     @Option(names = "--site", scope = CommandLine.ScopeType.INHERIT,
-            description = "ZrLog base URL, including an optional context path")
+            description = "ZrLog base URL, including an optional context path (defaults to the last login)")
     String site;
 
     @Option(names = "--token-file", scope = CommandLine.ScopeType.INHERIT,
@@ -58,7 +58,6 @@ public class Application implements Runnable {
     Map<String, String> environment = System.getenv();
     Path dotenvPath = Path.of(".env");
     private Map<String, String> dotenv;
-    Path credentialDirectory;
     java.util.function.Consumer<java.net.URI> browser = OAuthLogin::openBrowser;
 
     enum Output { text, json }
@@ -117,13 +116,13 @@ public class Application implements Runnable {
         String resolvedSite = resolvedSite();
         String token = resolvedToken();
         if (resolvedSite == null || resolvedSite.isBlank()) {
-            throw new ApiException("Set --site or ZRLOG_SITE_URL (environment or .env)", 3, null, null);
+            throw new ApiException("Run zrlogctl login --site <URL>, or set --site or ZRLOG_SITE_URL (environment or .env)", 3, null, null);
         }
         if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
         try {
             boolean bearer = accessTokenSource();
             if (token == null || token.isBlank()) {
-                OAuthLogin login = oauthLogin();
+                OAuthLogin login = oauthLogin(resolvedSite);
                 OAuthTokens saved = credentialStore(login).update(current -> {
                     if (current == null) throw new ApiException("Run zrlogctl login --site <URL>, or supply a personal access token", 4, null, null);
                     return login.refresh(current);
@@ -140,16 +139,12 @@ public class Application implements Runnable {
 
     ContentService contentService() {
         ZrLogApi api = api();
-        return new ContentService(api, apiSite());
-    }
-
-    private java.net.URI apiSite() {
-        String resolvedSite = resolvedSite();
-        return java.net.URI.create(resolvedSite.endsWith("/") ? resolvedSite.substring(0, resolvedSite.length() - 1) : resolvedSite);
+        return new ContentService(api, api.http().config().baseUri());
     }
 
     private String resolvedSite() {
-        return first(site, first(environment.get("ZRLOG_SITE_URL"), dotenv().get("ZRLOG_SITE_URL")));
+        String configured = first(site, first(environment.get("ZRLOG_SITE_URL"), dotenv().get("ZRLOG_SITE_URL")));
+        return configured != null ? configured : siteConfig().defaultSite();
     }
 
     private String resolvedToken() {
@@ -167,16 +162,21 @@ public class Application implements Runnable {
         if (environment.containsKey("ZRLOG_ACCESS_TOKEN")) return true;
         return !environment.containsKey("ZRLOG_ADMIN_TOKEN") && dotenv().containsKey("ZRLOG_ACCESS_TOKEN");
     }
-    private OAuthLogin oauthLogin() {
-        if (resolvedSite() == null || resolvedSite().isBlank()) throw new ApiException("Set --site or ZRLOG_SITE_URL", 3, null, null);
+    private OAuthLogin oauthLogin(String resolvedSite) {
+        if (resolvedSite == null || resolvedSite.isBlank()) throw new ApiException("Set --site or ZRLOG_SITE_URL", 3, null, null);
         if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
-        try { return new OAuthLogin(java.net.URI.create(resolvedSite()), Duration.ofSeconds(timeout)); }
+        try { return new OAuthLogin(java.net.URI.create(resolvedSite), Duration.ofSeconds(timeout)); }
         catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
     }
     private CredentialStore credentialStore(OAuthLogin login) {
-        Path directory = credentialDirectory != null ? credentialDirectory : Path.of(
-                environment.getOrDefault("XDG_CONFIG_HOME", Path.of(System.getProperty("user.home"), ".config").toString()), "zrlog", "credentials");
-        return new CredentialStore(directory, login.issuer());
+        return new CredentialStore(configDirectory().resolve("credentials"), login.issuer());
+    }
+    private Path configDirectory() {
+        return Path.of(environment.getOrDefault("XDG_CONFIG_HOME",
+                Path.of(System.getProperty("user.home"), ".config").toString()), "zrlog");
+    }
+    private SiteConfig siteConfig() {
+        return new SiteConfig(configDirectory());
     }
 
     @Command(name = "login", description = "Authorize zrlogctl through your browser")
@@ -189,13 +189,14 @@ public class Application implements Runnable {
             if (wait < 1 || wait > 1800) throw new ApiException("--wait must be between 1 and 1800 seconds", 3, null, null);
             if (permissions != null && (permissions.isEmpty() || permissions.stream().anyMatch(p -> !p.matches("[a-z_]+(?:\\.[a-z_]+)+"))))
                 throw new ApiException("--permissions must contain account action IDs", 3, null, null);
-            OAuthLogin login = root.oauthLogin();
+            OAuthLogin login = root.oauthLogin(root.resolvedSite());
             String scope = (permissions == null ? "account:inherit" : String.join(" ", permissions)) + " offline_access";
             OAuthTokens tokens = login.login(scope, Duration.ofSeconds(wait), uri -> {
                 System.err.println("Open this URL to authorize zrlogctl:\n" + uri);
                 if (!noBrowser) root.browser.accept(uri);
             });
             root.credentialStore(login).update(previous -> tokens);
+            root.siteConfig().saveDefaultSite(login.issuer());
             root.emit(Map.of("site", login.issuer(), "scope", tokens.scope()), "Signed in to " + login.issuer());
             return 0;
         }
@@ -204,8 +205,9 @@ public class Application implements Runnable {
     static class Logout implements Callable<Integer> {
         @ParentCommand Application root;
         public Integer call() {
-            OAuthLogin login = root.oauthLogin();
+            OAuthLogin login = root.oauthLogin(root.resolvedSite());
             root.credentialStore(login).update(current -> { if (current != null) login.revoke(current); return null; });
+            root.siteConfig().clearDefaultSite(login.issuer());
             root.emit(Map.of("site", login.issuer(), "signedOut", true), "Signed out of " + login.issuer());
             return 0;
         }

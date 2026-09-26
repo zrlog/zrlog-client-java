@@ -17,22 +17,23 @@ curl -fsSL https://dl.zrlog.com/ctl/install | sh
 推荐通过浏览器登录，无需手动登记应用或复制访问令牌：
 
 ```bash
-export ZRLOG_SITE_URL=https://blog.example.com
-zrlogctl login
+zrlogctl login --site https://blog.example.com
 # 在浏览器登录，选择指定权限或显式继承账号权限，并确认授权
 zrlogctl article list
 zrlogctl logout
 ```
 
-也可以使用 `zrlogctl login --site https://blog.example.com/sub`。客户端使用系统浏览器、PKCE 与本机随机端口回调，校验 state 和 issuer。没有桌面浏览器时可传 `--no-browser`，在同一台电脑的浏览器打开打印的地址；不需要输入 token。默认等待 300 秒，可用 `--wait` 调整。
+登录成功后会将该站点记为默认站点，之后在任意目录执行 `zrlogctl article list` 都无需重复传 `--site`。再次登录其他站点会切换默认站点；临时访问其他站点可使用 `--site`，不会改变已保存的默认值。也可以通过 `ZRLOG_SITE_URL` 环境变量或当前目录 `.env` 指定站点。升级前已登录的用户需要重新执行一次 `login --site <URL>` 来保存默认站点。
+
+部署在子路径时使用 `zrlogctl login --site https://blog.example.com/sub`。客户端使用系统浏览器、PKCE 与本机随机端口回调，校验 state 和 issuer。没有桌面浏览器时可传 `--no-browser`，在同一台电脑的浏览器打开打印的地址；不需要输入 token。默认等待 300 秒，可用 `--wait` 调整。
 
 登录页使用现有账号权限。可传 `--permissions article.read,taxonomy.read` 限定申请范围；不传时可在浏览器选择权限或继承账号权限。保留“长期连接”授权后客户端自动刷新；撤销授权、停用账号、修改认证信息后需重新登录。
 
-凭证按站点保存到 `$XDG_CONFIG_HOME/zrlog/credentials/`（默认 `~/.config/zrlog/credentials/`），文件权限为 `0600`。并发进程通过文件锁串行刷新。`logout` 先撤销服务端授权，再删除该站点本机凭证；不会打印明文凭证。使用服务端配置的规范站点地址，包含部署 context path。
+凭证按站点保存到 `$XDG_CONFIG_HOME/zrlog/credentials/`（默认 `~/.config/zrlog/credentials/`），默认站点单独保存到同级的 `default-site` 文件，文件权限均为 `0600`。并发进程通过文件锁串行刷新。`logout` 先撤销服务端授权，再删除该站点本机凭证；如果退出的是默认站点，也会清除默认值，不会自动切换到其他站点。不会打印明文凭证。使用服务端配置的规范站点地址，包含部署 context path。
 
 博客与后台分域部署时，`--site` 填服务的对外入口，例如 `https://xiaochun-admin.zrlog.com`，并在“设置 → 管理设置 → 后端服务地址”保存同一个地址，避免 OAuth 发现和回调校验使用静态博客域名。配置字段 `backend_server_url` 不进入博客公开数据；连接客户端仍需要知道服务入口，应填写代理地址而非内部源站。未填写时继续兼容 `ZRLOG_BACKEND_URL` 环境变量。
 
-脚本也可使用个人访问令牌。配置优先级：命令行 > 环境变量 > 当前目录 `.env` > 浏览器登录凭证。支持 `ZRLOG_SITE_URL`、`ZRLOG_ACCESS_TOKEN` 和兼容的 `ZRLOG_ADMIN_TOKEN`；同一层级优先使用 ACCESS_TOKEN，环境变量始终优先于 `.env`。
+脚本也可使用个人访问令牌。站点优先级：`--site` > 环境变量 `ZRLOG_SITE_URL` > 当前目录 `.env` 中的 `ZRLOG_SITE_URL` > 已保存的默认站点。令牌优先级：命令行 > 环境变量 > 当前目录 `.env` > 对应站点的浏览器登录凭证。支持 `ZRLOG_ACCESS_TOKEN` 和兼容的 `ZRLOG_ADMIN_TOKEN`；同一层级优先使用 ACCESS_TOKEN，环境变量始终优先于 `.env`。
 
 ```bash
 zrlogctl --site https://blog.example.com --token-file ~/.zrlog-access-token article list
