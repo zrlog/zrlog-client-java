@@ -4,7 +4,11 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.Set;
 
-public record ClientConfig(URI baseUri, String token, Duration timeout) {
+public record ClientConfig(URI baseUri, String token, Duration timeout, boolean bearer) {
+
+    public ClientConfig(URI baseUri, String token, Duration timeout) {
+        this(baseUri, token, timeout, token != null && (token.startsWith("zrpat_") || token.startsWith("zrmcp_")));
+    }
 
     private static final Set<String> LOCAL_HOSTS = Set.of("localhost", "127.0.0.1", "[::1]", "::1");
 
@@ -18,10 +22,10 @@ public record ClientConfig(URI baseUri, String token, Duration timeout) {
             throw new IllegalArgumentException("ZrLog site must use HTTPS except for localhost");
         }
         if (token == null || token.isBlank()) {
-            throw new IllegalArgumentException("ZrLog admin token is required");
+            throw new IllegalArgumentException("ZrLog access token is required");
         }
         if (token.chars().anyMatch(Character::isISOControl)) {
-            throw new IllegalArgumentException("ZrLog admin token must not contain control characters");
+            throw new IllegalArgumentException("ZrLog access token must not contain control characters");
         }
         timeout = timeout == null ? Duration.ofSeconds(30) : timeout;
         if (timeout.isZero() || timeout.isNegative()) {

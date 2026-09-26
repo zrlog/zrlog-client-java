@@ -1,5 +1,8 @@
 package com.zrlog.client;
 
+import com.zrlog.client.auth.CredentialStore;
+import com.zrlog.client.auth.OAuthLogin;
+import com.zrlog.client.auth.OAuthTokens;
 import com.zrlog.client.content.ArticleSource;
 import com.zrlog.client.content.ContentFiles;
 import com.zrlog.client.content.ContentPolicy;
@@ -28,7 +31,8 @@ import java.util.concurrent.Callable;
         description = "Non-graphical ZrLog administration for automation and AI agents.",
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class,
                 Application.MediaGroup.class, Application.ThemeGroup.class,
-                Application.ContentGroup.class, Application.UpdateGroup.class})
+                Application.ContentGroup.class, Application.UpdateGroup.class,
+                Application.Login.class, Application.Logout.class, Application.NotificationGroup.class})
 public class Application implements Runnable {
 
     @Option(names = "--site", scope = CommandLine.ScopeType.INHERIT,
@@ -36,11 +40,11 @@ public class Application implements Runnable {
     String site;
 
     @Option(names = "--token-file", scope = CommandLine.ScopeType.INHERIT,
-            description = "Read X-ZrLog-Admin-Token from this file")
+            description = "Read a personal access token or legacy admin token from this file")
     Path tokenFile;
 
     @Option(names = "--token", scope = CommandLine.ScopeType.INHERIT,
-            description = "X-ZrLog-Admin-Token (prefer --token-file outside ephemeral automation)")
+            description = "Personal access token or legacy admin token (prefer login or --token-file)")
     String tokenValue;
 
     @Option(names = "--output", scope = CommandLine.ScopeType.INHERIT, defaultValue = "text",
@@ -54,6 +58,8 @@ public class Application implements Runnable {
     Map<String, String> environment = System.getenv();
     Path dotenvPath = Path.of(".env");
     private Map<String, String> dotenv;
+    Path credentialDirectory;
+    java.util.function.Consumer<java.net.URI> browser = OAuthLogin::openBrowser;
 
     enum Output { text, json }
 
@@ -113,12 +119,19 @@ public class Application implements Runnable {
         if (resolvedSite == null || resolvedSite.isBlank()) {
             throw new ApiException("Set --site or ZRLOG_SITE_URL (environment or .env)", 3, null, null);
         }
-        if (token == null || token.isBlank()) {
-            throw new ApiException("Set --token, --token-file, or ZRLOG_ADMIN_TOKEN (environment or .env)", 4, null, null);
-        }
         if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
         try {
-            ClientConfig config = new ClientConfig(java.net.URI.create(resolvedSite), token.trim(), Duration.ofSeconds(timeout));
+            boolean bearer = accessTokenSource();
+            if (token == null || token.isBlank()) {
+                OAuthLogin login = oauthLogin();
+                OAuthTokens saved = credentialStore(login).update(current -> {
+                    if (current == null) throw new ApiException("Run zrlogctl login --site <URL>, or supply a personal access token", 4, null, null);
+                    return login.refresh(current);
+                });
+                token = saved.accessToken(); bearer = true;
+            }
+            ClientConfig detected = new ClientConfig(java.net.URI.create(resolvedSite), token.trim(), Duration.ofSeconds(timeout));
+            ClientConfig config = new ClientConfig(detected.baseUri(), detected.token(), detected.timeout(), bearer || detected.bearer());
             return new ZrLogApi(new ZrLogHttpClient(config));
         } catch (IllegalArgumentException e) {
             throw new ApiException(e.getMessage(), 3, e);
@@ -145,7 +158,57 @@ public class Application implements Runnable {
         }
         if (tokenValue != null) return tokenValue;
         if (tokenFile != null) return readToken(tokenFile);
-        return first(environment.get("ZRLOG_ADMIN_TOKEN"), dotenv().get("ZRLOG_ADMIN_TOKEN"));
+        return first(first(environment.get("ZRLOG_ACCESS_TOKEN"), environment.get("ZRLOG_ADMIN_TOKEN")),
+                first(dotenv().get("ZRLOG_ACCESS_TOKEN"), dotenv().get("ZRLOG_ADMIN_TOKEN")));
+    }
+
+    private boolean accessTokenSource() {
+        if (tokenValue != null || tokenFile != null) return false;
+        if (environment.containsKey("ZRLOG_ACCESS_TOKEN")) return true;
+        return !environment.containsKey("ZRLOG_ADMIN_TOKEN") && dotenv().containsKey("ZRLOG_ACCESS_TOKEN");
+    }
+    private OAuthLogin oauthLogin() {
+        if (resolvedSite() == null || resolvedSite().isBlank()) throw new ApiException("Set --site or ZRLOG_SITE_URL", 3, null, null);
+        if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
+        try { return new OAuthLogin(java.net.URI.create(resolvedSite()), Duration.ofSeconds(timeout)); }
+        catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
+    }
+    private CredentialStore credentialStore(OAuthLogin login) {
+        Path directory = credentialDirectory != null ? credentialDirectory : Path.of(
+                environment.getOrDefault("XDG_CONFIG_HOME", Path.of(System.getProperty("user.home"), ".config").toString()), "zrlog", "credentials");
+        return new CredentialStore(directory, login.issuer());
+    }
+
+    @Command(name = "login", description = "Authorize zrlogctl through your browser")
+    static class Login implements Callable<Integer> {
+        @ParentCommand Application root;
+        @Option(names = "--no-browser", description = "Print the authorization URL without opening a browser") boolean noBrowser;
+        @Option(names = "--permissions", split = ",", description = "Request specific account action IDs; otherwise choose permissions in the browser") List<String> permissions;
+        @Option(names = "--wait", defaultValue = "300", description = "Seconds to wait for browser authorization") int wait;
+        public Integer call() {
+            if (wait < 1 || wait > 1800) throw new ApiException("--wait must be between 1 and 1800 seconds", 3, null, null);
+            if (permissions != null && (permissions.isEmpty() || permissions.stream().anyMatch(p -> !p.matches("[a-z_]+(?:\\.[a-z_]+)+"))))
+                throw new ApiException("--permissions must contain account action IDs", 3, null, null);
+            OAuthLogin login = root.oauthLogin();
+            String scope = (permissions == null ? "account:inherit" : String.join(" ", permissions)) + " offline_access";
+            OAuthTokens tokens = login.login(scope, Duration.ofSeconds(wait), uri -> {
+                System.err.println("Open this URL to authorize zrlogctl:\n" + uri);
+                if (!noBrowser) root.browser.accept(uri);
+            });
+            root.credentialStore(login).update(previous -> tokens);
+            root.emit(Map.of("site", login.issuer(), "scope", tokens.scope()), "Signed in to " + login.issuer());
+            return 0;
+        }
+    }
+    @Command(name = "logout", description = "Revoke and remove the saved login for this site")
+    static class Logout implements Callable<Integer> {
+        @ParentCommand Application root;
+        public Integer call() {
+            OAuthLogin login = root.oauthLogin();
+            root.credentialStore(login).update(current -> { if (current != null) login.revoke(current); return null; });
+            root.emit(Map.of("site", login.issuer(), "signedOut", true), "Signed out of " + login.issuer());
+            return 0;
+        }
     }
 
     private Map<String, String> dotenv() {
@@ -182,6 +245,26 @@ public class Application implements Runnable {
             value = value.getCause();
         }
         return value;
+    }
+
+    @Command(name = "notification", description = "Send site notifications", subcommands = NotificationSend.class)
+    static class NotificationGroup implements Runnable {
+        @ParentCommand Application root;
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+    @Command(name = "send", description = "Send a message-center notification")
+    static class NotificationSend implements Callable<Integer> {
+        @ParentCommand NotificationGroup group;
+        @Option(names = "--title", required = true) String title;
+        @Option(names = "--description", defaultValue = "") String description;
+        @Option(names = "--key", description = "Stable key to replace an earlier notice") String key;
+        @Option(names = "--source", defaultValue = "zrlogctl") String source;
+        public Integer call() {
+            if (title.isBlank() || title.length() > 120 || description.length() > 2000) throw new ApiException("Invalid notification title or description", 3, null, null);
+            var result = group.root.api().sendNotification(new com.zrlog.client.model.NotificationRequest(title, description, key, source));
+            group.root.emit(result, "Sent notification " + result.taskKey());
+            return 0;
+        }
     }
 
     @Command(name = "article", description = "Manage ZrLog articles", subcommands = {

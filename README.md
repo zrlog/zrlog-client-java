@@ -14,30 +14,40 @@ curl -fsSL https://dl.zrlog.com/ctl/install | sh
 
 ## 鉴权
 
-站点地址和管理 token 的配置优先级为：命令行参数 > 进程环境变量 > 当前目录 `.env`。支持的环境变量为 `ZRLOG_SITE_URL` 和 `ZRLOG_ADMIN_TOKEN`：
+推荐通过浏览器登录，无需手动登记应用或复制访问令牌：
 
 ```bash
 export ZRLOG_SITE_URL=https://blog.example.com
-install -m 600 /dev/null ~/.zrlog-admin-token
-printf '%s\n' 'ADMIN_TOKEN' > ~/.zrlog-admin-token
-
-zrlogctl --token-file ~/.zrlog-admin-token article list
+zrlogctl login
+# 在浏览器登录，选择指定权限或显式继承账号权限，并确认授权
+zrlogctl article list
+zrlogctl logout
 ```
 
-也可以在当前目录建立 `.env`：
+也可以使用 `zrlogctl login --site https://blog.example.com/sub`。客户端使用系统浏览器、PKCE 与本机随机端口回调，校验 state 和 issuer。没有桌面浏览器时可传 `--no-browser`，在同一台电脑的浏览器打开打印的地址；不需要输入 token。默认等待 300 秒，可用 `--wait` 调整。
 
-```dotenv
-ZRLOG_SITE_URL=https://blog.example.com
-ZRLOG_ADMIN_TOKEN=ADMIN_TOKEN
+登录页使用现有账号权限。可传 `--permissions article.read,taxonomy.read` 限定申请范围；不传时可在浏览器选择权限或继承账号权限。保留“长期连接”授权后客户端自动刷新；撤销授权、停用账号、修改认证信息后需重新登录。
+
+凭证按站点保存到 `$XDG_CONFIG_HOME/zrlog/credentials/`（默认 `~/.config/zrlog/credentials/`），文件权限为 `0600`。并发进程通过文件锁串行刷新。`logout` 先撤销服务端授权，再删除该站点本机凭证；不会打印明文凭证。使用服务端配置的规范站点地址，包含部署 context path。
+
+博客与后台分域部署时，`--site` 填实际后端地址，例如 `https://xiaochun-admin.zrlog.com`。服务端使用 `ZRLOG_BACKEND_URL` 配置同一个公开地址，避免 OAuth 发现和回调校验使用静态博客域名。
+
+脚本也可使用个人访问令牌。配置优先级：命令行 > 环境变量 > 当前目录 `.env` > 浏览器登录凭证。支持 `ZRLOG_SITE_URL`、`ZRLOG_ACCESS_TOKEN` 和兼容的 `ZRLOG_ADMIN_TOKEN`；同一层级优先使用 ACCESS_TOKEN，环境变量始终优先于 `.env`。
+
+```bash
+zrlogctl --site https://blog.example.com --token-file ~/.zrlog-access-token article list
 ```
 
-命令行可用 `--site` 和 `--token` 覆盖以上值。`--token` 可能进入 shell 历史或进程参数，长期使用仍建议选择权限为 `0600` 的 `--token-file`。
+`--token-file` 要求权限 `0600`。`zrpat_` 令牌和浏览器 OAuth 使用 Authorization Bearer；旧后台令牌保留原 Header。`ZRLOG_ACCESS_TOKEN` 可显式传入 Bearer 凭证。`--token` 可能进入 shell 历史或进程参数，长期接入请使用登录或文件。
 
-非本机站点必须使用 HTTPS。token 文件不能向 group 或 other 开放权限。客户端拒绝 HTTP 重定向，避免管理 token 被转发到其他地址。
+非本机站点必须使用 HTTPS。API 和令牌交换拒绝 HTTP 重定向，避免凭证转发到其他地址。
 
 ## 常用命令
 
 ```bash
+# 需要发送通知权限，站点需开启“接收外部通知”
+zrlogctl notification send --title "部署完成" --description "生产环境已更新" --key production-deploy
+
 # 无需连接站点的本地检查
 zrlogctl content check content/doc/example.md
 # 仓库可选策略

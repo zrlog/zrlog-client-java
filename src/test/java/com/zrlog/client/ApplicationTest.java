@@ -230,4 +230,44 @@ class ApplicationTest {
     private static MockResponse json(String body) {
         return new MockResponse().setBody(body).addHeader("Content-Type", "application/json");
     }
+    @Test void browserLoginRefreshApiAndLogoutNeedNoManuallyEnteredToken() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            server.enqueue(new MockResponse().setBody("{\"access_token\":\"" + "a".repeat(43) + "\",\"refresh_token\":\"" + "r".repeat(43) + "\",\"token_type\":\"Bearer\",\"expires_in\":1,\"scope\":\"account:inherit offline_access\"}"));
+            Application app = new Application(); app.environment=Map.of(); app.dotenvPath=temporary.resolve("missing.env");
+            app.credentialDirectory=temporary.resolve("credentials"); app.site=server.url("/sub").toString();
+            app.browser=uri->{
+                var query=com.zrlog.client.auth.OAuthLogin.parameters(uri.getRawQuery());
+                try {
+                    String callback=query.get("redirect_uri")+"?"+com.zrlog.client.auth.OAuthLogin.form(Map.of("state",query.get("state"),"iss",app.site,"code","c".repeat(43)));
+                    java.net.http.HttpClient.newHttpClient().send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(callback)).GET().build(),java.net.http.HttpResponse.BodyHandlers.discarding());
+                } catch(Exception e) { throw new RuntimeException(e); }
+            };
+            assertEquals(0,Application.commandLine(app).execute("login"));
+            assertEquals("/sub/oauth/token",server.takeRequest().getPath());
+            server.enqueue(new MockResponse().setBody("{\"access_token\":\"" + "b".repeat(43) + "\",\"refresh_token\":\"" + "s".repeat(43) + "\",\"token_type\":\"Bearer\",\"expires_in\":600,\"scope\":\"account:inherit offline_access\"}"));
+            server.enqueue(new MockResponse().setBody("{\"error\":0,\"data\":{\"rows\":[]}}"));
+            assertTrue(app.api().listCategories().isEmpty());
+            var refresh=server.takeRequest(); assertEquals("/sub/oauth/token",refresh.getPath());
+            assertTrue(refresh.getBody().readUtf8().contains("grant_type=refresh_token"));
+            var api=server.takeRequest(); assertEquals("/sub/api/admin/article-type",api.getPath());
+            assertEquals("Bearer "+"b".repeat(43),api.getHeader("Authorization"));
+            assertEquals(null,api.getHeader("X-ZrLog-Admin-Token"));
+            server.enqueue(new MockResponse().setBody("{}"));
+            assertEquals(0,Application.commandLine(app).execute("logout"));
+            assertEquals("/sub/oauth/revoke",server.takeRequest().getPath());
+            assertThrows(ApiException.class,app::api);
+        }
+    }
+    @Test void accessTokenEnvironmentUsesBearerAndKeepsEnvironmentAboveDotenv() throws Exception {
+        Files.writeString(temporary.resolve(".env"),"ZRLOG_ACCESS_TOKEN=dotenv-access\n");
+        Application app=new Application(); app.dotenvPath=temporary.resolve(".env"); app.site="http://localhost:18080/sub";
+        app.environment=Map.of("ZRLOG_ADMIN_TOKEN","old-header");
+        assertEquals("old-header",app.api().http().config().token());
+        assertEquals(false,app.api().http().config().bearer());
+        app.environment=Map.of("ZRLOG_ACCESS_TOKEN","opaque-access","ZRLOG_ADMIN_TOKEN","old-header");
+        assertEquals("opaque-access",app.api().http().config().token());
+        assertEquals(true,app.api().http().config().bearer());
+    }
+
 }

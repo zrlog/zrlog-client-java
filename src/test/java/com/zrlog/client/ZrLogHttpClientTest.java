@@ -58,4 +58,13 @@ class ZrLogHttpClientTest {
         ApiException error = assertThrows(ApiException.class, () -> client.get("/api/admin/test"));
         assertEquals(302, error.httpStatus());
     }
+    @Test void personalTokensUseBearerAndPermissionFailuresAreAuthenticationErrors() throws Exception {
+        ZrLogHttpClient personal=new ZrLogHttpClient(new ClientConfig(server.url("/sub").uri(),"zrpat_"+"a".repeat(43),Duration.ofSeconds(2)));
+        server.enqueue(new MockResponse().setBody("{\"error\":9016,\"message\":\"denied\"}"));
+        assertEquals(4,assertThrows(ApiException.class,()->personal.get("/api/admin/test")).exitCode());
+        var request=server.takeRequest();
+        assertEquals("Bearer zrpat_"+"a".repeat(43),request.getHeader("Authorization"));
+        assertEquals(null,request.getHeader("X-ZrLog-Admin-Token"));
+    }
+
 }

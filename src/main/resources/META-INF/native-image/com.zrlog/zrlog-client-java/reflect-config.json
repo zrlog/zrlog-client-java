@@ -1,7 +1,50 @@
 [
-  {"name":"com.zrlog.client.model.Article","allDeclaredConstructors":true,"allDeclaredFields":true,"allDeclaredMethods":true},
-  {"name":"com.zrlog.client.model.Category","allDeclaredConstructors":true,"allDeclaredFields":true,"allDeclaredMethods":true},
-  {"name":"com.zrlog.client.model.Theme","allDeclaredConstructors":true,"allDeclaredFields":true,"allDeclaredMethods":true},
-  {"name":"com.zrlog.client.content.ContentService$Result","allDeclaredConstructors":true,"allDeclaredFields":true,"allDeclaredMethods":true},
-  {"name":"com.zrlog.client.update.UpdateService$Manifest","allDeclaredConstructors":true,"allDeclaredFields":true,"allDeclaredMethods":true}
+  {
+    "name": "com.zrlog.client.model.Article",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.zrlog.client.model.Category",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.zrlog.client.model.Theme",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.zrlog.client.content.ContentService$Result",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.zrlog.client.update.UpdateService$Manifest",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.zrlog.client.auth.OAuthTokens",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.zrlog.client.model.NotificationRequest",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.zrlog.client.model.NotificationResult",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  }
 ]

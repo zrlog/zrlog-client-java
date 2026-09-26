@@ -56,7 +56,7 @@ public class ZrLogHttpClient {
                 .timeout(config.timeout())
                 .header("Accept", "application/json")
                 .header("User-Agent", BuildInfo.USER_AGENT)
-                .header("X-ZrLog-Admin-Token", config.token())
+                .header(config.bearer() ? "Authorization" : "X-ZrLog-Admin-Token", config.bearer() ? "Bearer " + config.token() : config.token())
                 .method(method, body);
         if (contentType != null) builder.header("Content-Type", contentType);
         try {
@@ -72,7 +72,7 @@ public class ZrLogHttpClient {
             if (error != null && error != 0) {
                 String message = JsonSupport.string(result, "message", "unknown ZrLog API error");
                 throw new ApiException("ZrLog API error " + error + ": " + message,
-                        error == 9001 ? 4 : 6, response.statusCode(), error);
+                        error == 9001 || error == 9016 ? 4 : 6, response.statusCode(), error);
             }
             return result;
         } catch (InterruptedException e) {

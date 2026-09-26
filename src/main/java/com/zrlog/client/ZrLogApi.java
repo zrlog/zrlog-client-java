@@ -29,6 +29,11 @@ public class ZrLogApi {
 
     public ZrLogApi(ZrLogHttpClient http) { this.http = http; }
 
+    public com.zrlog.client.model.NotificationResult sendNotification(com.zrlog.client.model.NotificationRequest request) {
+        JsonObject result = data(http.post("/api/webhook/message-center/notice", JsonSupport.GSON.toJsonTree(request).getAsJsonObject()));
+        return new com.zrlog.client.model.NotificationResult(JsonSupport.string(result, "taskKey", ""), JsonSupport.number(result, "updatedAt"));
+    }
+
     ZrLogHttpClient http() { return http; }
 
     public List<Category> listCategories() {
