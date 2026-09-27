@@ -143,7 +143,7 @@ public class UpdateService {
 
     private byte[] readBytes(URI uri) {
         try {
-            HttpResponse<byte[]> response = client.send(downloadRequest(uri), HttpResponse.BodyHandlers.ofByteArray());
+            HttpResponse<byte[]> response = client.send(HttpClients.withProxyAuthorization(client, downloadRequest(uri)), HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() != 200) {
                 throw new ApiException("Update download failed with HTTP " + response.statusCode(), 8,
                         response.statusCode(), null);
@@ -153,7 +153,7 @@ public class UpdateService {
             Thread.currentThread().interrupt();
             throw new ApiException("Update download interrupted", 8, e);
         } catch (IOException e) {
-            throw new ApiException("Unable to download update: " + e.getMessage(), 8, e);
+            throw new ApiException("Unable to download update: " + HttpClients.failureDescription(client, uri, e), 8, e);
         }
     }
 

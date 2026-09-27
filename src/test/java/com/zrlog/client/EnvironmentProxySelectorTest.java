@@ -163,6 +163,27 @@ class EnvironmentProxySelectorTest {
         assertTrue(notified[0]);
     }
 
+    @Test
+    void describesTheSelectedRouteAndVariableWithoutCredentials() {
+        var selector = new EnvironmentProxySelector(Map.of("https_proxy", "http://user:secret@proxy.example:8080",
+                "HTTPS_PROXY", "http://ignored.example:19999", "all_proxy", "http://fallback.example:3128",
+                "no_proxy", "internal.example"), null);
+        assertEquals("HTTP proxy proxy.example:8080 (https_proxy)", selector.describe(URI.create("https://blog.example")));
+        assertEquals("HTTP proxy fallback.example:3128 (all_proxy)", selector.describe(URI.create("http://blog.example")));
+        assertEquals("direct (no_proxy)", selector.describe(URI.create("https://internal.example")));
+        var httpOnly = new EnvironmentProxySelector(Map.of("HTTP_PROXY", "http://proxy.example:8080"), null);
+        assertEquals("direct (no proxy selected for https)", httpOnly.describe(URI.create("https://blog.example")));
+    }
+
+    @Test
+    void createsPreemptiveAuthorizationOnlyForTheSelectedProxy() {
+        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "http://user:pass@proxy.example:8080",
+                "NO_PROXY", "internal.example"), null);
+        assertEquals("Basic dXNlcjpwYXNz", selector.authorization(URI.create("https://blog.example")));
+        assertNull(selector.authorization(URI.create("http://blog.example")));
+        assertNull(selector.authorization(URI.create("https://internal.example")));
+    }
+
     private static void assertProxy(ProxySelector selector, String target, String host, int port) {
         List<Proxy> proxies = selector.select(URI.create(target));
         assertEquals(1, proxies.size());

@@ -43,7 +43,7 @@ public class ZrLogHttpClient {
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream, application/json")
                 .build();
-        var response = client.sendAsync(request, info -> {
+        var response = client.sendAsync(HttpClients.withProxyAuthorization(client, request), info -> {
             checkStatus(info.statusCode(), "POST", path);
             String contentType = info.headers().firstValue("Content-Type").orElse("").split(";", 2)[0].trim();
             if (contentType.equalsIgnoreCase("text/event-stream")) return new PublishStream(info.statusCode(), progress);
@@ -66,7 +66,8 @@ public class ZrLogHttpClient {
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof ApiException api) throw api;
-            throw new ApiException("Publishing connection failed; the article may have been saved. Verify its current state before retrying.", 5, cause);
+            throw new ApiException("Publishing connection failed: " + HttpClients.failureDescription(client, request.uri(), cause)
+                    + "; the article may have been saved. Verify its current state before retrying.", 5, cause);
         }
     }
 
@@ -87,7 +88,7 @@ public class ZrLogHttpClient {
         HttpRequest.Builder builder = request(path, method, body).header("Accept", "application/json");
         if (contentType != null) builder.header("Content-Type", contentType);
         try {
-            HttpResponse<String> response = client.send(builder.build(),
+            HttpResponse<String> response = client.send(HttpClients.withProxyAuthorization(client, builder.build()),
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             checkStatus(response.statusCode(), method, path);
             return checkedResponse(JsonSupport.parseObject(response.body(), method + " " + path), response.statusCode());
@@ -95,7 +96,7 @@ public class ZrLogHttpClient {
             Thread.currentThread().interrupt();
             throw new ApiException("Request interrupted", 5, e);
         } catch (IOException e) {
-            throw new ApiException("Unable to reach ZrLog: " + e.getMessage(), 5, e);
+            throw new ApiException("Unable to reach ZrLog: " + HttpClients.failureDescription(client, config.resolve(path), e), 5, e);
         }
     }
 

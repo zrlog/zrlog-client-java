@@ -98,10 +98,11 @@ public final class OAuthLogin {
                 .header("Content-Type", "application/x-www-form-urlencoded").header("Accept", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(form(values))).build();
         try {
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = http.send(HttpClients.withProxyAuthorization(http, request), HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) throw new ApiException("OAuth request failed with HTTP " + response.statusCode() + "; run login again if access expired", 4, response.statusCode(), null);
             return JsonSupport.parseObject(response.body(), "OAuth response");
-        } catch (IOException e) { throw new ApiException("Unable to reach the authorization server", 5, e); }
+        } catch (IOException e) { throw new ApiException("Unable to reach the authorization server: "
+                + HttpClients.failureDescription(http, request.uri(), e), 5, e); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new ApiException("Authorization request interrupted", 4, e); }
     }
     public static void openBrowser(URI uri) {

@@ -2,7 +2,9 @@ package com.zrlog.client;
 
 import java.net.ProxySelector;
 import java.net.Authenticator;
+import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
 import java.time.Duration;
 
 /** Shared transport settings for API, OAuth, and update requests. */
@@ -21,5 +23,27 @@ public final class HttpClients {
         Authenticator authenticator = proxy.authenticator();
         if (authenticator != null) builder.authenticator(authenticator);
         return builder.build();
+    }
+
+    public static HttpRequest withProxyAuthorization(HttpClient client, HttpRequest request) {
+        if (client.proxy().orElse(null) instanceof EnvironmentProxySelector proxy) {
+            String authorization = proxy.authorization(request.uri());
+            if (authorization != null) {
+                // Send credentials on the first proxy request, as curl does. The JDK
+                // forwards this header to CONNECT and strips it from tunneled requests.
+                return HttpRequest.newBuilder(request, (name, value) -> true)
+                        .setHeader("Proxy-Authorization", authorization).build();
+            }
+        }
+        return request;
+    }
+
+    public static String failureDescription(HttpClient client, URI target, Throwable failure) {
+        String message = failure.getMessage();
+        if (message == null || message.isBlank()) message = failure.getClass().getSimpleName();
+        if (client.proxy().orElse(null) instanceof EnvironmentProxySelector proxy) {
+            return message + " [route: " + proxy.describe(target) + "]";
+        }
+        return message;
     }
 }

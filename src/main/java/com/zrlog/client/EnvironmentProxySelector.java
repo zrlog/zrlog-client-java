@@ -11,6 +11,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -22,13 +23,44 @@ final class EnvironmentProxySelector extends ProxySelector {
     private final Endpoint httpProxy;
     private final Endpoint httpsProxy;
     private final String[] noProxy;
+    private final String noProxyVariable;
     private final ProxySelector fallback;
 
     EnvironmentProxySelector(Map<String, String> environment, ProxySelector fallback) {
         httpProxy = proxy(environment, "http_proxy");
         httpsProxy = proxy(environment, "https_proxy");
-        noProxy = value(environment, "no_proxy").split(",");
+        Setting bypass = setting(environment, "no_proxy");
+        noProxy = bypass.value().split(",");
+        noProxyVariable = bypass.name();
         this.fallback = fallback;
+    }
+
+    String describe(URI uri) {
+        for (String entry : noProxy) {
+            if (bypasses(uri, entry.trim())) return "direct (" + noProxyVariable + ")";
+        }
+        Endpoint endpoint = endpoint(uri);
+        if (endpoint != null) return describe(endpoint.proxy()) + " (" + endpoint.variable() + ")";
+        for (Proxy proxy : select(uri)) {
+            if (proxy.type() == Proxy.Type.HTTP) return describe(proxy) + " (runtime settings)";
+        }
+        return "direct (no proxy selected for " + uri.getScheme() + ")";
+    }
+
+    private static String describe(Proxy proxy) {
+        var address = (InetSocketAddress) proxy.address();
+        String host = address.getHostString();
+        if (host.contains(":") && !host.startsWith("[")) host = "[" + host + "]";
+        return "HTTP proxy " + host + ":" + address.getPort();
+    }
+
+    String authorization(URI uri) {
+        Endpoint endpoint = endpoint(uri);
+        if (endpoint == null || endpoint.credentials() == null
+                || !select(uri).equals(List.of(endpoint.proxy()))) return null;
+        PasswordAuthentication credentials = endpoint.credentials();
+        String userPass = credentials.getUserName() + ":" + new String(credentials.getPassword());
+        return "Basic " + Base64.getEncoder().encodeToString(userPass.getBytes(StandardCharsets.UTF_8));
     }
 
     @Override
@@ -81,8 +113,12 @@ final class EnvironmentProxySelector extends ProxySelector {
     }
 
     private static Endpoint proxy(Map<String, String> environment, String name) {
-        if (value(environment, name).isEmpty()) name = "all_proxy";
-        String value = value(environment, name);
+        Setting configured = setting(environment, name);
+        if (configured.value().isEmpty()) {
+            name = "all_proxy";
+            configured = setting(environment, name);
+        }
+        String value = configured.value();
         if (value.isEmpty()) return null;
         try {
             URI uri = URI.create(value.contains("://") ? value : "http://" + value);
@@ -94,7 +130,7 @@ final class EnvironmentProxySelector extends ProxySelector {
             }
             Proxy proxy = new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved(uri.getHost(),
                     uri.getPort() == -1 ? 80 : uri.getPort()));
-            return new Endpoint(proxy, credentials(uri.getRawUserInfo()));
+            return new Endpoint(proxy, credentials(uri.getRawUserInfo()), configured.name());
         } catch (IllegalArgumentException e) {
             // Never include the configured value or parser exception: either may contain credentials.
             throw new ApiException("Invalid " + name + "/" + name.toUpperCase(Locale.ROOT)
@@ -119,12 +155,15 @@ final class EnvironmentProxySelector extends ProxySelector {
         return URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8);
     }
 
-    private record Endpoint(Proxy proxy, PasswordAuthentication credentials) { }
+    private record Endpoint(Proxy proxy, PasswordAuthentication credentials, String variable) { }
 
-    private static String value(Map<String, String> environment, String name) {
+    private record Setting(String name, String value) { }
+
+    private static Setting setting(Map<String, String> environment, String name) {
         String lower = environment.get(name);
-        if (lower != null && !lower.isBlank()) return lower.trim();
-        return environment.getOrDefault(name.toUpperCase(Locale.ROOT), "").trim();
+        if (lower != null && !lower.isBlank()) return new Setting(name, lower.trim());
+        String upperName = name.toUpperCase(Locale.ROOT);
+        return new Setting(upperName, environment.getOrDefault(upperName, "").trim());
     }
 
     private static boolean bypasses(URI uri, String entry) {
