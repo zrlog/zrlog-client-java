@@ -90,6 +90,10 @@ zrlogctl update check
 
 环境代理主机名同时有 IPv4 和 IPv6 地址时，客户端通过 `InetAddress.getAllByName()` 获取全部地址，优先选择 IPv6，并将已解析的地址交给 HTTP client，避免再次解析选回排在前面的 IPv4。只有 IPv4 地址时继续使用 IPv4；此策略仅作用于环境变量指定的代理，不修改 JVM 全局地址族设置。选中的代理不通会报错，不回退直连；需指定某个地址时可直接填写 IPv4 或带方括号的 IPv6 地址。
 
+API、OAuth 和更新请求统一使用 HTTP/1.1，兼容不支持 HTTP/2 的站点或中间链路。启动时会读取当前机器 `/etc/ssl/certs` 下的 `.pem` / `.crt` CA 文件（含符号链接和证书包），与 Java 默认可信 CA 合并到内存信任库；原生二进制同样在运行时读取，无需预先导入 JKS/PKCS12 或传入 `-Djavax.net.ssl.trustStore`。TLS 证书链、有效期和主机名仍会校验。
+
+需要自定义 PEM 来源时，可设置 `SSL_CERT_DIR`（以系统路径分隔符分隔的目录，在 Linux 上为冒号）或 `SSL_CERT_FILE`（PEM 证书包）；Java 默认 CA 仍保留。指定的路径不可读或 PEM 无效时报告配置错误，不关闭证书校验。若显式设置了 `javax.net.ssl.trustStore`，则尊重该 JSSE 配置，不再自动合并系统 PEM。
+
 `no_proxy` / `NO_PROXY` 是逗号分隔的直连列表，优先于代理和运行时默认设置。支持域名及其子域、前导 `.` / `*.`、IPv4/IPv6 地址、可选端口（IPv6 带端口时使用 `[::1]:8080`），以及表示全部直连的 `*`；不支持 CIDR 网段。代理变量只读取进程环境，不读取项目 `.env`；桌面代理工具需开启 HTTP 或混合端口并导出上述变量。通过 `sudo` 更新时，也需确保管理员进程收到这些变量。
 
 网络连接失败时，错误末尾会显示所选代理地址和变量名，例如 `[route: HTTP proxy 127.0.0.1:19999 (https_proxy)]`；命中直连列表时显示 `[route: direct (NO_PROXY)]`。这些信息不含代理用户名或密码。若大小写变量同时存在，仅修改大写值不会覆盖非空的小写值；HTTPS 站点需设置 `https_proxy` / `HTTPS_PROXY` 或 `all_proxy` / `ALL_PROXY`，单独设置 `HTTP_PROXY` 不会影响 HTTPS 请求。
@@ -195,7 +199,7 @@ zrlogctl update apply
 
 ## 构建
 
-需要 GraalVM Java 25、Native Image、GCC 和 zlib 开发包。发布构建还使用 Python 3、OpenSSL 和 JDK 的 `keytool` 验证原生二进制的代理连接；测试环境须支持 IPv4/IPv6 回环连接。在 Ubuntu 上可安装 `build-essential zlib1g-dev python3 openssl`：
+需要 GraalVM Java 25、Native Image、GCC 和 zlib 开发包。发布构建还使用 Python 3 和 OpenSSL 验证原生二进制的代理连接；测试环境须支持 IPv4/IPv6 回环连接。在 Ubuntu 上可安装 `build-essential zlib1g-dev python3 openssl`：
 
 ```bash
 ./mvnw test
@@ -203,5 +207,7 @@ zrlogctl update apply
 ```
 
 打包脚本在生成发布文件前运行 `python3 bin/test-native-proxy.py target/zrlogctl`。测试启动本机认证代理和 IPv4 HTTPS 服务，实际运行 `article list` 和 `update check`，覆盖 IPv4、IPv6 字面量、仅解析到 IPv6 的代理主机名、IPv4 排在前面的双地址代理、首次 CONNECT 认证、代理凭据隔离及死端口禁止回退直连。双地址测试让 IPv4 监听器返回策略明文，要求请求只到达正常转发的 IPv6 监听器。证书和 hosts 文件均为临时测试数据，不依赖外部网络或真实令牌。
+
+TLS 测试在原生编译后生成新的 CA 和签发证书，通过运行时 PEM 目录或证书包建立信任，不使用 Java truststore 文件。测试服务优先提供 HTTP/2，验证客户端仍使用 HTTP/1.1，并确认不可信 CA、错误主机名和过期证书均被拒绝。
 
 版本由 `pom.xml` 的 `0.1` 基础版本和构建号组成，例如 `0.1.42`。脚本优先读取 `BUILD_NUMBER`，本地未设置时使用 Git 提交数；CI 使用 GitHub Actions run number。脚本拒绝非 Linux AMD64 平台，并生成可以直接同步到下载站的 `ctl/release` 目录。项目不构建或分发通用 Jar。

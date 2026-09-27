@@ -127,18 +127,31 @@ def main(binary):
         subprocess.run(["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
                         "-out", str(csr), "-subj", "/CN=blog.invalid"], check=True, capture_output=True)
 
-        def sign(name, hosts, days=1):
+        def sign(name, hosts, expired=False):
             extensions = directory / f"{name}.ext"
-            extensions.write_text("basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName=" + hosts + "\n")
+            extensions.write_text("[server]\nbasicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName=" + hosts + "\n")
             signed = directory / name
-            subprocess.run(["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca), "-CAkey", str(ca_key),
-                            "-CAcreateserial", "-out", str(signed), "-days", str(days), "-extfile", str(extensions)],
-                           check=True, capture_output=True)
+            if expired:
+                # Use explicit historical dates: some OpenSSL versions reject negative -days.
+                (directory / "issued").mkdir()
+                (directory / "index.txt").touch()
+                (directory / "serial").write_text("01\n")
+                config = directory / "ca.cnf"
+                config.write_text("[ca]\ndefault_ca=test\n[test]\ncertificate=ca-certificates/runtime-ca.pem\n"
+                                  "private_key=ca.key\ndatabase=index.txt\nserial=serial\nnew_certs_dir=issued\n"
+                                  "default_md=sha256\npolicy=names\n[names]\ncommonName=supplied\n")
+                command = ["openssl", "ca", "-batch", "-notext", "-config", str(config), "-in", str(csr),
+                           "-startdate", "20000101000000Z", "-enddate", "20000102000000Z"]
+            else:
+                command = ["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca), "-CAkey", str(ca_key),
+                           "-CAcreateserial", "-days", "1"]
+            subprocess.run([*command, "-out", str(signed), "-extfile", str(extensions), "-extensions", "server"],
+                           cwd=directory, check=True, capture_output=True)
             return signed
 
         sign("cert.pem", "DNS:blog.invalid,DNS:dl.zrlog.com")
         wrong_host = sign("wrong-host.pem", "DNS:other.invalid")
-        expired = sign("expired.pem", "DNS:blog.invalid,DNS:dl.zrlog.com", days=-1)
+        expired = sign("expired.pem", "DNS:blog.invalid,DNS:dl.zrlog.com", expired=True)
         hosts = directory / "hosts"
         # Deliberately list IPv4 first for the mixed proxy. Only its IPv6 listener
         # can forward requests; its IPv4 listener returns a plaintext policy error.
