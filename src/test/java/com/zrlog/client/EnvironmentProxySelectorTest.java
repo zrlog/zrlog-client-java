@@ -6,11 +6,14 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
+import java.net.Authenticator;
 import java.net.InetSocketAddress;
+import java.net.PasswordAuthentication;
 import java.net.Proxy;
 import java.net.ProxySelector;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.net.URL;
 import java.util.List;
 import java.util.Map;
 
@@ -82,7 +85,8 @@ class EnvironmentProxySelectorTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"socks5://proxy.example:1080", "https://proxy.example:443", "http://user:secret@proxy.example",
+    @ValueSource(strings = {"socks5://proxy.example:1080", "https://proxy.example:443", "http://user:secret@proxy.example/path",
+            "http://user%3Aname:secret@proxy.example", "http://user:secret%0D%0A@proxy.example", "http://user%00:secret@proxy.example",
             "http://proxy.example/path", "http://proxy.example?secret", "http://proxy.example#secret",
             "http://proxy.example:0", "http://proxy.example:65536", "http://proxy.example:bad",
             "http://proxy.example:", "http://", "http://bad host"})
@@ -94,6 +98,50 @@ class EnvironmentProxySelectorTest {
         assertFalse(error.getMessage().contains("secret"));
         assertFalse(error.getMessage().contains("proxy.example"));
         assertNull(error.getCause());
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {"u%40ser+name:p%3Aa%40ss%25+word|u@ser+name|p:a@ss%+word",
+            "user:pa:ss|user|pa:ss", "user:|user|", "user|user|"}, delimiter = '|', emptyValue = "", nullValues = "")
+    void decodesCredentialsWithoutTreatingPlusAsSpace(String userInfo, String username, String password) throws Exception {
+        var selector = new EnvironmentProxySelector(Map.of("ALL_PROXY", "http://" + userInfo + "@proxy.example:8080"), null);
+        assertProxy(selector, "https://blog.example", "proxy.example", 8080);
+        PasswordAuthentication credentials = authenticate(selector, "https://blog.example", "proxy.example", 8080,
+                Authenticator.RequestorType.PROXY, "Basic");
+        assertNotNull(credentials);
+        assertEquals(username, credentials.getUserName());
+        assertArrayEquals((password == null ? "" : password).toCharArray(), credentials.getPassword());
+    }
+
+    @Test
+    void keepsProtocolCredentialsSeparateEvenForTheSameProxyAddress() throws Exception {
+        var selector = new EnvironmentProxySelector(Map.of(
+                "HTTP_PROXY", "http://web:one@proxy.example:8080",
+                "HTTPS_PROXY", "http://tls:two@proxy.example:8080"), null);
+        assertEquals("web", authenticate(selector, "http://blog.example", "proxy.example", 8080,
+                Authenticator.RequestorType.PROXY, "Basic").getUserName());
+        assertEquals("tls", authenticate(selector, "https://blog.example", "proxy.example", 8080,
+                Authenticator.RequestorType.PROXY, "Basic").getUserName());
+    }
+
+    @Test
+    void onlyAuthenticatesTheSelectedProxyAndNeverAnOriginOrBypassedHost() throws Exception {
+        var selector = new EnvironmentProxySelector(Map.of("HTTP_PROXY", "http://user:pass@proxy.example:8080",
+                "NO_PROXY", "internal.example"), null);
+        assertNull(authenticate(selector, "http://blog.example", "proxy.example", 8080, Authenticator.RequestorType.SERVER, "Basic"));
+        assertNull(authenticate(selector, "http://blog.example", "other.example", 8080, Authenticator.RequestorType.PROXY, "Basic"));
+        assertNull(authenticate(selector, "http://blog.example", "proxy.example", 8081, Authenticator.RequestorType.PROXY, "Basic"));
+        assertNull(authenticate(selector, "http://internal.example", "proxy.example", 8080, Authenticator.RequestorType.PROXY, "Basic"));
+        assertNull(authenticate(selector, "https://blog.example", "proxy.example", 8080, Authenticator.RequestorType.PROXY, "Basic"));
+        assertNull(authenticate(selector, "http://blog.example", "proxy.example", 8080, Authenticator.RequestorType.PROXY, "Digest"));
+        assertNull(authenticate(selector, null, "proxy.example", 8080, Authenticator.RequestorType.PROXY, "Basic"));
+        assertNull(new EnvironmentProxySelector(Map.of("ALL_PROXY", "proxy.example:8080"), null).authenticator());
+    }
+
+    private static PasswordAuthentication authenticate(EnvironmentProxySelector selector, String target, String host,
+                                                         int port, Authenticator.RequestorType type, String scheme) throws Exception {
+        URL url = target == null ? null : URI.create(target).toURL();
+        return selector.authenticator().requestPasswordAuthenticationInstance(host, null, port, "http", "test", scheme, url, type);
     }
 
     @Test

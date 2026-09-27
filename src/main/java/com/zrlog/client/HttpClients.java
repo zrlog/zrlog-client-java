@@ -1,6 +1,7 @@
 package com.zrlog.client;
 
 import java.net.ProxySelector;
+import java.net.Authenticator;
 import java.net.http.HttpClient;
 import java.time.Duration;
 
@@ -9,10 +10,16 @@ public final class HttpClients {
     private HttpClients() { }
 
     public static HttpClient create(Duration timeout) {
-        return HttpClient.newBuilder()
+        // The JDK reads this once when its HTTP internals initialize. Allow Basic
+        // CONNECT authentication by default, while honoring explicit JVM settings.
+        System.getProperties().putIfAbsent("jdk.http.auth.tunneling.disabledSchemes", "");
+        var proxy = new EnvironmentProxySelector(System.getenv(), ProxySelector.getDefault());
+        HttpClient.Builder builder = HttpClient.newBuilder()
                 .connectTimeout(timeout)
                 .followRedirects(HttpClient.Redirect.NEVER)
-                .proxy(new EnvironmentProxySelector(System.getenv(), ProxySelector.getDefault()))
-                .build();
+                .proxy(proxy);
+        Authenticator authenticator = proxy.authenticator();
+        if (authenticator != null) builder.authenticator(authenticator);
+        return builder.build();
     }
 }

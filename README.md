@@ -82,7 +82,9 @@ zrlogctl article list
 zrlogctl update check
 ```
 
-代理地址支持 `http://host:port` 或 `host:port`，省略端口时使用 `80`。HTTPS 目标通过 HTTP 代理的 CONNECT 隧道访问，仍会校验证书。当前不支持 SOCKS、HTTPS 代理端点或需要用户名密码的代理；不支持或无效的配置会报错，不会静默直连，错误也不会回显代理地址中的凭据。
+代理地址支持 `http://host:port`、`host:port` 和 `http://user:password@host:port`，省略端口时使用 `80`。带凭据时支持 Basic 代理认证：收到代理的 `407 Proxy Authentication Required` 后发送 `Proxy-Authorization`，适用于普通 HTTP 请求及 HTTPS CONNECT 隧道。HTTPS 目标仍会校验证书；代理凭据只用于所配置代理的认证，不响应目标站点的认证挑战，也不会放入隧道内的目标站点请求。
+
+例如 `export HTTPS_PROXY='http://user:pass@host:port'`。用户名和密码支持百分号编码（如 `@` 写成 `%40`、`%` 写成 `%25`），字面 `+` 保持不变；密码可包含冒号，用户名不能包含冒号。当前不支持 SOCKS、HTTPS 代理端点及 Basic 以外的代理认证方式；无效配置会报错，不会回显代理凭据。
 
 `no_proxy` / `NO_PROXY` 是逗号分隔的直连列表，优先于代理和运行时默认设置。支持域名及其子域、前导 `.` / `*.`、IPv4/IPv6 地址、可选端口（IPv6 带端口时使用 `[::1]:8080`），以及表示全部直连的 `*`；不支持 CIDR 网段。代理变量只读取进程环境，不读取项目 `.env`；桌面代理工具需开启 HTTP 或混合端口并导出上述变量。通过 `sudo` 更新时，也需确保管理员进程收到这些变量。
 

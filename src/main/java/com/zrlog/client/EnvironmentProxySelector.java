@@ -1,11 +1,16 @@
 package com.zrlog.client;
 
 import java.io.IOException;
+import java.net.Authenticator;
 import java.net.InetSocketAddress;
+import java.net.PasswordAuthentication;
 import java.net.Proxy;
 import java.net.ProxySelector;
 import java.net.SocketAddress;
 import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -14,8 +19,8 @@ import java.util.Objects;
 /** Standard shell proxy variables, falling back to the runtime's proxy settings. */
 final class EnvironmentProxySelector extends ProxySelector {
     private static final List<Proxy> DIRECT = List.of(Proxy.NO_PROXY);
-    private final Proxy httpProxy;
-    private final Proxy httpsProxy;
+    private final Endpoint httpProxy;
+    private final Endpoint httpsProxy;
     private final String[] noProxy;
     private final ProxySelector fallback;
 
@@ -35,9 +40,39 @@ final class EnvironmentProxySelector extends ProxySelector {
         for (String entry : noProxy) {
             if (bypasses(uri, entry.trim())) return DIRECT;
         }
-        Proxy proxy = "https".equalsIgnoreCase(scheme) ? httpsProxy : httpProxy;
-        if (proxy != null) return List.of(proxy);
+        Endpoint endpoint = endpoint(uri);
+        if (endpoint != null) return List.of(endpoint.proxy());
         return fallback == null ? DIRECT : fallback.select(uri);
+    }
+
+    Authenticator authenticator() {
+        if ((httpProxy == null || httpProxy.credentials() == null)
+                && (httpsProxy == null || httpsProxy.credentials() == null)) return null;
+        return new Authenticator() {
+            @Override
+            protected PasswordAuthentication getPasswordAuthentication() {
+                if (getRequestorType() != RequestorType.PROXY || !"basic".equalsIgnoreCase(getRequestingScheme())
+                        || getRequestingURL() == null || getRequestingHost() == null) return null;
+                try {
+                    URI target = getRequestingURL().toURI();
+                    Endpoint endpoint = endpoint(target);
+                    if (endpoint == null || endpoint.credentials() == null
+                            || !select(target).equals(List.of(endpoint.proxy()))) return null;
+                    var address = (InetSocketAddress) endpoint.proxy().address();
+                    if (address.getPort() != getRequestingPort()
+                            || !normalizeHost(address.getHostString()).equals(normalizeHost(getRequestingHost()))) return null;
+                    return endpoint.credentials();
+                } catch (URISyntaxException e) {
+                    return null;
+                }
+            }
+        };
+    }
+
+    private Endpoint endpoint(URI uri) {
+        if ("http".equalsIgnoreCase(uri.getScheme())) return httpProxy;
+        if ("https".equalsIgnoreCase(uri.getScheme())) return httpsProxy;
+        return null;
     }
 
     @Override
@@ -45,27 +80,46 @@ final class EnvironmentProxySelector extends ProxySelector {
         if (fallback != null) fallback.connectFailed(uri, address, failure);
     }
 
-    private static Proxy proxy(Map<String, String> environment, String name) {
+    private static Endpoint proxy(Map<String, String> environment, String name) {
         if (value(environment, name).isEmpty()) name = "all_proxy";
         String value = value(environment, name);
         if (value.isEmpty()) return null;
         try {
             URI uri = URI.create(value.contains("://") ? value : "http://" + value);
             if (!"http".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null
-                    || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
+                    || uri.getRawQuery() != null || uri.getRawFragment() != null
                     || (!uri.getRawPath().isEmpty() && !"/".equals(uri.getRawPath()))
                     || uri.getPort() == 0 || uri.getPort() > 65535 || uri.getRawAuthority().endsWith(":")) {
                 throw new IllegalArgumentException();
             }
-            return new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved(uri.getHost(),
+            Proxy proxy = new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved(uri.getHost(),
                     uri.getPort() == -1 ? 80 : uri.getPort()));
+            return new Endpoint(proxy, credentials(uri.getRawUserInfo()));
         } catch (IllegalArgumentException e) {
             // Never include the configured value or parser exception: either may contain credentials.
             throw new ApiException("Invalid " + name + "/" + name.toUpperCase(Locale.ROOT)
-                    + ": use an HTTP proxy such as http://host:port without credentials, path, query, or fragment"
+                    + ": use http://[user:password@]host:port without path, query, or fragment;"
+                    + " credentials must not contain control characters or a colon in the username"
                     + " (SOCKS and HTTPS proxy endpoints are not supported)", 3, null, null);
         }
     }
+
+    private static PasswordAuthentication credentials(String userInfo) {
+        if (userInfo == null) return null;
+        int separator = userInfo.indexOf(':');
+        String username = decode(separator < 0 ? userInfo : userInfo.substring(0, separator));
+        String password = separator < 0 ? "" : decode(userInfo.substring(separator + 1));
+        if (username.contains(":") || username.chars().anyMatch(Character::isISOControl)
+                || password.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException();
+        return new PasswordAuthentication(username, password.toCharArray());
+    }
+
+    private static String decode(String value) {
+        // Userinfo is a URI component, not form data: a literal '+' stays a plus.
+        return URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8);
+    }
+
+    private record Endpoint(Proxy proxy, PasswordAuthentication credentials) { }
 
     private static String value(Map<String, String> environment, String name) {
         String lower = environment.get(name);
