@@ -109,7 +109,9 @@ final class EnvironmentProxySelector extends ProxySelector {
 
     @Override
     public void connectFailed(URI uri, SocketAddress address, IOException failure) {
-        if (fallback != null) fallback.connectFailed(uri, address, failure);
+        // A failure of an explicitly configured proxy belongs to that route only.
+        // Notify the runtime selector only when it supplied the original route.
+        if (endpoint(uri) == null && fallback != null) fallback.connectFailed(uri, address, failure);
     }
 
     private static Endpoint proxy(Map<String, String> environment, String name) {

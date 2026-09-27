@@ -11,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -196,6 +197,31 @@ class ProxyEnvironmentHttpTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"http,false", "https,false", "http,true", "https,true"})
+    void reachesAnAuthenticatedIpv6ProxyByLiteralOrIpv6OnlyHostname(String scheme, boolean hostname) throws Exception {
+        Path hosts = directory.resolve("hosts");
+        Files.writeString(hosts, "::1 v6-proxy.invalid\n127.0.0.1 blog.invalid\n");
+        try (MockWebServer proxy = new MockWebServer()) {
+            proxy.start(InetAddress.getByName("::1"), 0);
+            boolean tunnel = scheme.equals("https");
+            proxy.enqueue(tunnel ? new MockResponse().setResponseCode(502) : new MockResponse().setBody(CATEGORIES));
+            String proxyHost = hostname ? "v6-proxy.invalid" : "[::1]";
+            String proxyUrl = "http://u%40ser+name:p%3Aa%40ss%25+word@" + proxyHost + ":" + proxy.getPort();
+            Result result = runWithProperties(List.of("-Djdk.net.hosts.file=" + hosts),
+                    Map.of(scheme + "_proxy", proxyUrl), "--site", tunnel ? "https://blog.invalid/sub" : SITE,
+                    "--token", "test-token", "category", "list");
+            assertEquals(tunnel ? 5 : 0, result.exitCode(), result.output());
+            RecordedRequest request = take(proxy);
+            assertEquals(tunnel ? "CONNECT blog.invalid:443 HTTP/1.1"
+                    : "GET " + SITE + "/api/admin/article-type HTTP/1.1", request.getRequestLine());
+            assertEquals(proxyAuthorization(), request.getHeader("Proxy-Authorization"));
+            assertEquals(tunnel ? null : "test-token", request.getHeader("X-ZrLog-Admin-Token"));
+            assertNull(request.getHeader("Authorization"));
+            assertEquals(1, proxy.getRequestCount());
+        }
+    }
+
     @Test
     void reportsInvalidProxyAsConfigurationErrorWithoutEchoingSecrets() throws Exception {
         Result result = run(Map.of("HTTPS_PROXY", "http://user:secret@proxy.invalid:8080/path"), "update", "check");
@@ -217,8 +243,13 @@ class ProxyEnvironmentHttpTest {
     }
 
     private Result run(Map<String, String> environment, String... args) throws Exception {
-        List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin/java").toString(),
-                "-cp", System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")),
+        return runWithProperties(List.of(), environment, args);
+    }
+
+    private Result runWithProperties(List<String> properties, Map<String, String> environment, String... args) throws Exception {
+        List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin/java").toString()));
+        command.addAll(properties);
+        command.addAll(List.of("-cp", System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")),
                 Application.class.getName(), "--timeout", "3"));
         command.addAll(List.of(args));
         Path output = Files.createTempFile(directory, "cli-", ".log");

@@ -164,6 +164,21 @@ class EnvironmentProxySelectorTest {
     }
 
     @Test
+    void keepsAnExplicitEnvironmentProxyAfterFailureWithoutConsultingRuntimeRoutes() {
+        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "http://[::1]:3128"), new ProxySelector() {
+            @Override public List<Proxy> select(URI uri) { return fail("Must not select a fallback route"); }
+            @Override public void connectFailed(URI uri, SocketAddress address, IOException failure) {
+                fail("An environment proxy failure must not update runtime routes");
+            }
+        });
+        URI target = URI.create("https://blog.example");
+        List<Proxy> selected = selector.select(target);
+        selector.connectFailed(target, selected.getFirst().address(), new IOException("Connection refused"));
+        assertEquals(selected, selector.select(target));
+        assertEquals(Proxy.Type.HTTP, selected.getFirst().type());
+    }
+
+    @Test
     void describesTheSelectedRouteAndVariableWithoutCredentials() {
         var selector = new EnvironmentProxySelector(Map.of("https_proxy", "http://user:secret@proxy.example:8080",
                 "HTTPS_PROXY", "http://ignored.example:19999", "all_proxy", "http://fallback.example:3128",

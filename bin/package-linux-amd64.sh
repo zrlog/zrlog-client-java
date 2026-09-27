@@ -58,6 +58,8 @@ binary_name=zrlogctl-linux-amd64
   -Pnative \
   clean package
 
+python3 bin/test-native-proxy.py target/zrlogctl
+
 mkdir -p "${version_root}"
 install -m 755 target/zrlogctl "${version_root}/${binary_name}"
 install -m 755 bin/install.sh "${output_root%/}/ctl/install.sh"
