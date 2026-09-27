@@ -22,7 +22,7 @@ public final class OAuthLogin {
     private final HttpClient http;
     public OAuthLogin(URI site, Duration timeout) {
         config = new ClientConfig(site, "oauth-login", timeout);
-        http = HttpClient.newBuilder().connectTimeout(timeout).followRedirects(HttpClient.Redirect.NEVER).build();
+        http = HttpClients.create(timeout);
     }
     public String issuer() { return config.baseUri().toString(); }
     public OAuthTokens login(String scope, Duration wait, Consumer<URI> browser) {

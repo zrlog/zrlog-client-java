@@ -105,6 +105,18 @@
                 <version>3.5.3</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
+                    <!-- Local HTTP tests must not inherit the developer's proxy settings.
+                         Proxy integration tests supply their own environment in child processes. -->
+                    <excludedEnvironmentVariables>
+                        <excludedEnvironmentVariable>http_proxy</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>HTTP_PROXY</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>https_proxy</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>HTTPS_PROXY</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>all_proxy</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>ALL_PROXY</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>no_proxy</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>NO_PROXY</excludedEnvironmentVariable>
+                    </excludedEnvironmentVariables>
                 </configuration>
             </plugin>
             <plugin>

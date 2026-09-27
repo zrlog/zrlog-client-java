@@ -21,13 +21,20 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 
 public class ZrLogApi {
 
     private static final int PAGE_SIZE = 100;
     private final ZrLogHttpClient http;
+    private final BiConsumer<String, JsonObject> publishProgress;
 
-    public ZrLogApi(ZrLogHttpClient http) { this.http = http; }
+    public ZrLogApi(ZrLogHttpClient http) { this(http, (event, data) -> { }); }
+
+    public ZrLogApi(ZrLogHttpClient http, BiConsumer<String, JsonObject> publishProgress) {
+        this.http = http;
+        this.publishProgress = publishProgress;
+    }
 
     public com.zrlog.client.model.NotificationResult sendNotification(com.zrlog.client.model.NotificationRequest request) {
         JsonObject result = data(http.post("/api/webhook/message-center/notice", JsonSupport.GSON.toJsonTree(request).getAsJsonObject()));
@@ -96,16 +103,22 @@ public class ZrLogApi {
     }
 
     public Article createArticle(ArticleSource source, Category category, boolean draft) {
-        JsonObject response = http.post("/api/admin/article/create", payload(source, category, draft, null));
+        JsonObject response = saveArticle("/api/admin/article/create", source, category, draft, null);
         JsonObject article = data(response).getAsJsonObject("article");
         if (article != null) return Article.from(article);
         return findUniqueByAlias(source.alias());
     }
 
     public Article updateArticle(ArticleSource source, Category category, Article current, boolean draft) {
-        JsonObject response = http.post("/api/admin/article/update", payload(source, category, draft, current));
+        JsonObject response = saveArticle("/api/admin/article/update", source, category, draft, current);
         JsonObject article = data(response).getAsJsonObject("article");
         return article == null ? getArticle(current.id()) : Article.from(article);
+    }
+
+    private JsonObject saveArticle(String path, ArticleSource source, Category category, boolean draft, Article current) {
+        JsonObject body = payload(source, category, draft, current);
+        return body.get("transparentPublish").getAsBoolean()
+                ? http.postPublish(path, body, publishProgress) : http.post(path, body);
     }
 
     public String upload(Path file, String directory) {
@@ -217,7 +230,7 @@ public class ZrLogApi {
         values.put("recommended", source.recommended());
         values.put("privacy", source.privacy());
         values.put("rubbish", draft);
-        values.put("transparentPublish", false);
+        values.put("transparentPublish", !draft && !source.privacy());
         values.put("editorType", "markdown");
         if (current == null) {
             values.put("preserveDraftAiMessages", true);

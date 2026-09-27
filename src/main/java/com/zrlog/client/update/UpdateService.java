@@ -3,6 +3,7 @@ package com.zrlog.client.update;
 import com.google.gson.JsonObject;
 import com.zrlog.client.ApiException;
 import com.zrlog.client.BuildInfo;
+import com.zrlog.client.HttpClients;
 import com.zrlog.client.JsonSupport;
 
 import java.io.IOException;
@@ -33,8 +34,7 @@ public class UpdateService {
     private final HttpClient client;
 
     public UpdateService() {
-        this(DEFAULT_MANIFEST, HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20))
-                .followRedirects(HttpClient.Redirect.NEVER).build());
+        this(DEFAULT_MANIFEST, HttpClients.create(Duration.ofSeconds(20)));
     }
 
     UpdateService(URI manifestUri, HttpClient client) {

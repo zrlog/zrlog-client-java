@@ -132,7 +132,7 @@ public class Application implements Runnable {
             }
             ClientConfig detected = new ClientConfig(java.net.URI.create(resolvedSite), token.trim(), Duration.ofSeconds(timeout));
             ClientConfig config = new ClientConfig(detected.baseUri(), detected.token(), detected.timeout(), bearer || detected.bearer());
-            return new ZrLogApi(new ZrLogHttpClient(config));
+            return new ZrLogApi(new ZrLogHttpClient(config), this::publishProgress);
         } catch (IllegalArgumentException e) {
             throw new ApiException(e.getMessage(), 3, e);
         }
@@ -141,6 +141,28 @@ public class Application implements Runnable {
     ContentService contentService() {
         ZrLogApi api = api();
         return new ContentService(api, api.http().config().baseUri());
+    }
+
+    void publishProgress(String event, com.google.gson.JsonObject data) {
+        if (output == Output.json) {
+            System.err.println(JsonSupport.GSON.toJson(Map.of("event", event, "data", data)));
+            return;
+        }
+        String message = switch (event) {
+            case "article" -> "Article saved; waiting for publication to complete";
+            case "publish-start" -> "Publishing article";
+            case "static-sync-start" -> "Starting static site sync";
+            case "static-progress" -> "Static site sync: " + JsonSupport.number(data, "handled") + "/" + JsonSupport.number(data, "total");
+            case "static-sync-complete" -> "Static site sync complete";
+            case "static-sync-skipped" -> "Static site sync is disabled";
+            case "publish-check-start" -> "Running publish check";
+            case "publish-check-complete" -> "Publish check complete";
+            case "publish-check-error" -> "Publish check warning: " + JsonSupport.string(data, "message", "check failed");
+            case "publish-complete" -> "Publication complete; verifying remote article";
+            case "response" -> "Server returned JSON; static site completion is unavailable. Verifying saved article";
+            default -> event;
+        };
+        System.err.println(message);
     }
 
     private String resolvedSite() {

@@ -62,6 +62,7 @@ class ContentServiceHttpTest {
         JsonObject body = JsonParser.parseString(create.getBody().readUtf8()).getAsJsonObject();
         assertEquals("/api/admin/article/create", create.getPath());
         assertTrue(body.get("rubbish").getAsBoolean());
+        assertFalse(body.get("transparentPublish").getAsBoolean());
         assertEquals("markdown", body.get("editorType").getAsString());
         assertFalse(body.has("content"));
         assertTrue(body.get("preserveDraftAiMessages").getAsBoolean());
@@ -77,6 +78,20 @@ class ContentServiceHttpTest {
 
         assertEquals("published", result.action());
         assertWriteRequest(false, 3);
+    }
+
+    @Test
+    void doesNotRereadOrRetryAnArticleWhenStaticSyncFailsAfterSaving() {
+        enqueueReadFlow(article(true, 3, "Managed", "Body\n"));
+        server.enqueue(new MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                "event: article\ndata: {\"error\":0,\"data\":{\"article\":" + articleJson(false, 4) + "}}\n\n"
+                        + "event: static-error\ndata: {\"message\":\"sync failed\"}\n\n"));
+
+        ApiException error = assertThrows(ApiException.class, () -> service.publish(source()));
+
+        assertEquals(6, error.exitCode());
+        assertTrue(error.getMessage().contains("article was saved"));
+        assertEquals(4, server.getRequestCount());
     }
 
     @Test
@@ -224,7 +239,11 @@ class ContentServiceHttpTest {
     private void enqueueWriteFlow(Article current, Article saved) {
         enqueueReadFlow(current);
         Gson gson = new Gson();
-        server.enqueue(articleResponse(gson, saved));
+        if (!saved.rubbish() && !saved.privacy()) {
+            server.enqueue(new MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                    "event: article\ndata: {\"error\":0,\"data\":{\"article\":" + gson.toJson(saved) + "}}\n\n"
+                            + "event: publish-complete\ndata: {}\n\n"));
+        } else server.enqueue(articleResponse(gson, saved));
         server.enqueue(articleResponse(gson, saved));
     }
 
@@ -236,6 +255,8 @@ class ContentServiceHttpTest {
         JsonObject body = JsonParser.parseString(update.getBody().readUtf8()).getAsJsonObject();
         assertEquals("/api/admin/article/update", update.getPath());
         assertEquals(draft, body.get("rubbish").getAsBoolean());
+        assertEquals(!draft, body.get("transparentPublish").getAsBoolean());
+        assertEquals(draft ? "application/json" : "text/event-stream, application/json", update.getHeader("Accept"));
         assertEquals(version, body.get("version").getAsInt());
         assertEquals(42, body.get("logId").getAsLong());
         assertFalse(body.has("content"));

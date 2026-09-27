@@ -70,6 +70,22 @@ zrlogctl --site https://blog.example.com --token-file ~/.zrlog-access-token arti
 
 非本机站点必须使用 HTTPS。API 和令牌交换拒绝 HTTP 重定向，避免凭证转发到其他地址。
 
+## 网络代理
+
+API、上传、OAuth 令牌交换/刷新/撤销以及更新检查和下载统一读取进程的代理环境变量：HTTP 请求使用 `http_proxy` / `HTTP_PROXY`，HTTPS 请求使用 `https_proxy` / `HTTPS_PROXY`，未设置对应协议时使用 `all_proxy` / `ALL_PROXY`。同名变量优先使用非空的小写值，空白值视为未设置。没有匹配的代理变量时，沿用 Java 运行时的默认代理设置。
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:7890
+export NO_PROXY=localhost,127.0.0.1,::1,.internal.example.com
+zrlogctl article list
+zrlogctl update check
+```
+
+代理地址支持 `http://host:port` 或 `host:port`，省略端口时使用 `80`。HTTPS 目标通过 HTTP 代理的 CONNECT 隧道访问，仍会校验证书。当前不支持 SOCKS、HTTPS 代理端点或需要用户名密码的代理；不支持或无效的配置会报错，不会静默直连，错误也不会回显代理地址中的凭据。
+
+`no_proxy` / `NO_PROXY` 是逗号分隔的直连列表，优先于代理和运行时默认设置。支持域名及其子域、前导 `.` / `*.`、IPv4/IPv6 地址、可选端口（IPv6 带端口时使用 `[::1]:8080`），以及表示全部直连的 `*`；不支持 CIDR 网段。代理变量只读取进程环境，不读取项目 `.env`；桌面代理工具需开启 HTTP 或混合端口并导出上述变量。通过 `sudo` 更新时，也需确保管理员进程收到这些变量。
+
 ## 常用命令
 
 ```bash
@@ -116,6 +132,12 @@ zrlogctl article list --output json
 ```
 
 `draft` 不会覆盖内容不同的草稿，也不会把已发布文章静默转为草稿。覆盖草稿或修订已发布文章需要绑定当前完整远端快照的 revision token。ZrLog 的文章 `version` 字段仍作为最终并发保护。
+
+公开发布和修订已发布文章会发送 `transparentPublish=true` 并接收 SSE，实时显示文章保存、静态站同步和发布检查进度。收到 `article` 事件只表示文章已保存；客户端等待 `publish-complete` 后，再回读文章校验内容与版本，最后输出成功结果。草稿和私密文章仍使用普通 JSON 请求。
+
+进度写入 stderr，最终结果写入 stdout；`--output json` 时 stderr 每行是一个 `{ "event": "...", "data": ... }` JSON 对象，stdout 仍是单个最终结果对象。`--timeout` 限制单次请求的完整时长，包括发布流，默认 30 秒；静态同步较慢时可以使用 `zrlogctl article publish content/doc/example.md --timeout 300`。
+
+`static-error`、`publish-error`、`sse-error` 会导致失败退出；连接中断、超时或缺少 `publish-complete` 也不会报告发布成功。此时文章可能已经保存，客户端不会自动重试写入，应先检查远端文章状态。发布检查的 `publish-check-error` 是提示，仍以最终发布完成事件为准。兼容旧服务端的普通 JSON 响应时，会提示无法确认静态同步完成，并继续校验已保存的文章。
 
 完整 front matter 约定见 [docs/content-format.md](docs/content-format.md)，示例位于 [examples](examples)。AI 写作风格、语料审阅和发布证据属于具体内容工程，不由 `zrlogctl` 强制。
 
