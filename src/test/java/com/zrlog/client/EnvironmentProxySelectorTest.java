@@ -7,6 +7,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.net.Authenticator;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.PasswordAuthentication;
 import java.net.Proxy;
@@ -21,8 +23,64 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class EnvironmentProxySelectorTest {
     @Test
+    void pinsAnIpv6ProxyAddressEvenWhenDnsReturnsIpv4FirstAndKeepsAuthentication() throws Exception {
+        InetAddress ipv4 = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
+        InetAddress ipv6 = InetAddress.getByName("::1");
+        int[] lookups = {0};
+        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "http://user:pass@mixed.invalid:3128"), null, host -> {
+            assertEquals("mixed.invalid", host);
+            lookups[0]++;
+            return new InetAddress[]{ipv4, ipv6};
+        });
+        URI target = URI.create("https://blog.example");
+        assertEquals("Basic dXNlcjpwYXNz", selector.authorization(target));
+        assertEquals("HTTP proxy mixed.invalid:3128 (HTTPS_PROXY)", selector.describe(target));
+        assertEquals(0, lookups[0], "Helper queries must not resolve or log a transport selection");
+        Proxy proxy = selector.select(target).getFirst();
+        assertEquals(Proxy.Type.HTTP, proxy.type());
+        var address = (InetSocketAddress) proxy.address();
+        assertFalse(address.isUnresolved());
+        assertInstanceOf(Inet6Address.class, address.getAddress());
+        assertEquals(ipv6, address.getAddress());
+        assertEquals("mixed.invalid", address.getHostString());
+        assertEquals(3128, address.getPort());
+        assertEquals("user", authenticate(selector, target.toString(), address.getHostString(), 3128,
+                Authenticator.RequestorType.PROXY, "Basic").getUserName());
+        assertEquals(1, lookups[0]);
+    }
+
+    @Test
+    void stillUsesIpv4WhenTheProxyHasNoIpv6Address() throws Exception {
+        InetAddress ipv4 = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
+        var selector = new EnvironmentProxySelector(Map.of("HTTP_PROXY", "http://v4.invalid:3128"), null,
+                host -> new InetAddress[]{ipv4});
+        var address = (InetSocketAddress) selector.select(URI.create("http://blog.example")).getFirst().address();
+        assertFalse(address.isUnresolved());
+        assertEquals(ipv4, address.getAddress());
+        assertEquals("v4.invalid", address.getHostString());
+    }
+
+    @Test
+    void preservesIpv6LiteralAuthenticationAndScopeWhenResolving() throws Exception {
+        Inet6Address ipv6 = Inet6Address.getByAddress(null, InetAddress.getByName("fe80::1").getAddress(), 7);
+        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "http://user:pass@[fe80::1%7]:3128"), null,
+                host -> new InetAddress[]{ipv6});
+        var address = (InetSocketAddress) selector.select(URI.create("https://blog.example")).getFirst().address();
+        assertEquals(7, ((Inet6Address) address.getAddress()).getScopeId());
+        assertEquals("user", authenticate(selector, "https://blog.example", address.getHostString(), 3128,
+                Authenticator.RequestorType.PROXY, "Basic").getUserName());
+    }
+
+    @Test
+    void bypassingAProxyDoesNotResolveItsHostname() {
+        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "http://proxy.invalid:3128", "NO_PROXY", "*"), null,
+                host -> { throw new AssertionError("A bypassed proxy must not be resolved"); });
+        assertEquals(List.of(Proxy.NO_PROXY), selector.select(URI.create("https://blog.example")));
+    }
+
+    @Test
     void selectsByProtocolWithLowercaseAndProtocolSpecificPrecedence() {
-        var selector = new EnvironmentProxySelector(Map.of(
+        var selector = selector(Map.of(
                 "http_proxy", " http://lower.example:8080 ", "HTTP_PROXY", "http://upper.example:8888",
                 "HTTPS_PROXY", "secure.example:3128", "ALL_PROXY", "socks5://unused.example:1080"), null);
         assertProxy(selector, "http://blog.example", "lower.example", 8080);
@@ -31,7 +89,7 @@ class EnvironmentProxySelectorTest {
 
     @Test
     void fallsBackToAllProxyAndIgnoresBlankValues() {
-        var selector = new EnvironmentProxySelector(Map.of(
+        var selector = selector(Map.of(
                 "http_proxy", " ", "HTTP_PROXY", "http://web.example",
                 "HTTPS_PROXY", "", "all_proxy", "http://[::1]:7890/", "ALL_PROXY", "http://upper.example"), null);
         assertProxy(selector, "http://blog.example", "web.example", 80);
@@ -59,13 +117,13 @@ class EnvironmentProxySelectorTest {
             "*,https://anything.example,true"
     })
     void honorsNoProxyWithoutMatchingUnrelatedHosts(String noProxy, String target, boolean direct) {
-        var selector = new EnvironmentProxySelector(Map.of("ALL_PROXY", "proxy.example:8080", "NO_PROXY", noProxy), null);
+        var selector = selector(Map.of("ALL_PROXY", "proxy.example:8080", "NO_PROXY", noProxy), null);
         assertEquals(direct, selector.select(URI.create(target)).equals(List.of(Proxy.NO_PROXY)));
     }
 
     @Test
     void parsesCommaSeparatedBypassesAndPrefersLowercaseNoProxy() {
-        var selector = new EnvironmentProxySelector(Map.of("ALL_PROXY", "proxy.example:8080",
+        var selector = selector(Map.of("ALL_PROXY", "proxy.example:8080",
                 "no_proxy", " , localhost, .internal.example , ", "NO_PROXY", "*"), null);
         assertEquals(List.of(Proxy.NO_PROXY), selector.select(URI.create("http://localhost:8080")));
         assertEquals(List.of(Proxy.NO_PROXY), selector.select(URI.create("https://blog.internal.example")));
@@ -75,12 +133,12 @@ class EnvironmentProxySelectorTest {
     @Test
     void preservesRuntimeProxySettingsUnlessEnvironmentOverridesThem() {
         ProxySelector fallback = ProxySelector.of(InetSocketAddress.createUnresolved("runtime.example", 3128));
-        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "env.example:8080",
+        var selector = selector(Map.of("HTTPS_PROXY", "env.example:8080",
                 "NO_PROXY", "internal.example"), fallback);
         assertProxy(selector, "http://blog.example", "runtime.example", 3128);
         assertProxy(selector, "https://blog.example", "env.example", 8080);
         assertEquals(List.of(Proxy.NO_PROXY), selector.select(URI.create("http://internal.example")));
-        assertEquals(List.of(Proxy.NO_PROXY), new EnvironmentProxySelector(Map.of(), null)
+        assertEquals(List.of(Proxy.NO_PROXY), selector(Map.of(), null)
                 .select(URI.create("https://blog.example")));
     }
 
@@ -92,7 +150,7 @@ class EnvironmentProxySelectorTest {
             "http://proxy.example:", "http://", "http://bad host"})
     void rejectsUnsupportedOrInvalidProxiesWithoutLeakingTheValue(String proxy) {
         ApiException error = assertThrows(ApiException.class,
-                () -> new EnvironmentProxySelector(Map.of("HTTPS_PROXY", proxy), null));
+                () -> selector(Map.of("HTTPS_PROXY", proxy), null));
         assertEquals(3, error.exitCode());
         assertTrue(error.getMessage().contains("HTTPS_PROXY"));
         assertFalse(error.getMessage().contains("secret"));
@@ -104,7 +162,7 @@ class EnvironmentProxySelectorTest {
     @CsvSource(value = {"u%40ser+name:p%3Aa%40ss%25+word|u@ser+name|p:a@ss%+word",
             "user:pa:ss|user|pa:ss", "user:|user|", "user|user|"}, delimiter = '|', emptyValue = "", nullValues = "")
     void decodesCredentialsWithoutTreatingPlusAsSpace(String userInfo, String username, String password) throws Exception {
-        var selector = new EnvironmentProxySelector(Map.of("ALL_PROXY", "http://" + userInfo + "@proxy.example:8080"), null);
+        var selector = selector(Map.of("ALL_PROXY", "http://" + userInfo + "@proxy.example:8080"), null);
         assertProxy(selector, "https://blog.example", "proxy.example", 8080);
         PasswordAuthentication credentials = authenticate(selector, "https://blog.example", "proxy.example", 8080,
                 Authenticator.RequestorType.PROXY, "Basic");
@@ -115,7 +173,7 @@ class EnvironmentProxySelectorTest {
 
     @Test
     void keepsProtocolCredentialsSeparateEvenForTheSameProxyAddress() throws Exception {
-        var selector = new EnvironmentProxySelector(Map.of(
+        var selector = selector(Map.of(
                 "HTTP_PROXY", "http://web:one@proxy.example:8080",
                 "HTTPS_PROXY", "http://tls:two@proxy.example:8080"), null);
         assertEquals("web", authenticate(selector, "http://blog.example", "proxy.example", 8080,
@@ -126,7 +184,7 @@ class EnvironmentProxySelectorTest {
 
     @Test
     void onlyAuthenticatesTheSelectedProxyAndNeverAnOriginOrBypassedHost() throws Exception {
-        var selector = new EnvironmentProxySelector(Map.of("HTTP_PROXY", "http://user:pass@proxy.example:8080",
+        var selector = selector(Map.of("HTTP_PROXY", "http://user:pass@proxy.example:8080",
                 "NO_PROXY", "internal.example"), null);
         assertNull(authenticate(selector, "http://blog.example", "proxy.example", 8080, Authenticator.RequestorType.SERVER, "Basic"));
         assertNull(authenticate(selector, "http://blog.example", "other.example", 8080, Authenticator.RequestorType.PROXY, "Basic"));
@@ -135,7 +193,7 @@ class EnvironmentProxySelectorTest {
         assertNull(authenticate(selector, "https://blog.example", "proxy.example", 8080, Authenticator.RequestorType.PROXY, "Basic"));
         assertNull(authenticate(selector, "http://blog.example", "proxy.example", 8080, Authenticator.RequestorType.PROXY, "Digest"));
         assertNull(authenticate(selector, null, "proxy.example", 8080, Authenticator.RequestorType.PROXY, "Basic"));
-        assertNull(new EnvironmentProxySelector(Map.of("ALL_PROXY", "proxy.example:8080"), null).authenticator());
+        assertNull(selector(Map.of("ALL_PROXY", "proxy.example:8080"), null).authenticator());
     }
 
     private static PasswordAuthentication authenticate(EnvironmentProxySelector selector, String target, String host,
@@ -150,7 +208,7 @@ class EnvironmentProxySelectorTest {
         SocketAddress address = InetSocketAddress.createUnresolved("runtime.example", 8080);
         IOException failure = new IOException("failed");
         boolean[] notified = {false};
-        var selector = new EnvironmentProxySelector(Map.of(), new ProxySelector() {
+        var selector = selector(Map.of(), new ProxySelector() {
             @Override public List<Proxy> select(URI ignored) { return List.of(Proxy.NO_PROXY); }
             @Override public void connectFailed(URI actual, SocketAddress actualAddress, IOException actualFailure) {
                 assertEquals(uri, actual);
@@ -165,7 +223,7 @@ class EnvironmentProxySelectorTest {
 
     @Test
     void keepsAnExplicitEnvironmentProxyAfterFailureWithoutConsultingRuntimeRoutes() {
-        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "http://[::1]:3128"), new ProxySelector() {
+        var selector = selector(Map.of("HTTPS_PROXY", "http://[::1]:3128"), new ProxySelector() {
             @Override public List<Proxy> select(URI uri) { return fail("Must not select a fallback route"); }
             @Override public void connectFailed(URI uri, SocketAddress address, IOException failure) {
                 fail("An environment proxy failure must not update runtime routes");
@@ -180,23 +238,31 @@ class EnvironmentProxySelectorTest {
 
     @Test
     void describesTheSelectedRouteAndVariableWithoutCredentials() {
-        var selector = new EnvironmentProxySelector(Map.of("https_proxy", "http://user:secret@proxy.example:8080",
+        var selector = selector(Map.of("https_proxy", "http://user:secret@proxy.example:8080",
                 "HTTPS_PROXY", "http://ignored.example:19999", "all_proxy", "http://fallback.example:3128",
                 "no_proxy", "internal.example"), null);
         assertEquals("HTTP proxy proxy.example:8080 (https_proxy)", selector.describe(URI.create("https://blog.example")));
         assertEquals("HTTP proxy fallback.example:3128 (all_proxy)", selector.describe(URI.create("http://blog.example")));
         assertEquals("direct (no_proxy)", selector.describe(URI.create("https://internal.example")));
-        var httpOnly = new EnvironmentProxySelector(Map.of("HTTP_PROXY", "http://proxy.example:8080"), null);
+        var httpOnly = selector(Map.of("HTTP_PROXY", "http://proxy.example:8080"), null);
         assertEquals("direct (no proxy selected for https)", httpOnly.describe(URI.create("https://blog.example")));
     }
 
     @Test
     void createsPreemptiveAuthorizationOnlyForTheSelectedProxy() {
-        var selector = new EnvironmentProxySelector(Map.of("HTTPS_PROXY", "http://user:pass@proxy.example:8080",
+        var selector = selector(Map.of("HTTPS_PROXY", "http://user:pass@proxy.example:8080",
                 "NO_PROXY", "internal.example"), null);
         assertEquals("Basic dXNlcjpwYXNz", selector.authorization(URI.create("https://blog.example")));
         assertNull(selector.authorization(URI.create("http://blog.example")));
         assertNull(selector.authorization(URI.create("https://internal.example")));
+    }
+
+    private static EnvironmentProxySelector selector(Map<String, String> environment, ProxySelector fallback) {
+        // Parsing/precedence tests do not depend on external DNS. Transport tests
+        // supply real loopback hosts; resolution tests inject explicit addresses.
+        return new EnvironmentProxySelector(environment, fallback, host -> {
+            throw new java.net.UnknownHostException(host);
+        });
     }
 
     private static void assertProxy(ProxySelector selector, String target, String host, int port) {

@@ -1,7 +1,12 @@
 package com.zrlog.client;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
 import java.io.IOException;
 import java.net.Authenticator;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.PasswordAuthentication;
 import java.net.Proxy;
@@ -9,6 +14,7 @@ import java.net.ProxySelector;
 import java.net.SocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -25,14 +31,23 @@ final class EnvironmentProxySelector extends ProxySelector {
     private final String[] noProxy;
     private final String noProxyVariable;
     private final ProxySelector fallback;
+    private final boolean debug;
+    private final HostResolver resolver;
 
     EnvironmentProxySelector(Map<String, String> environment, ProxySelector fallback) {
+        this(environment, fallback, InetAddress::getAllByName);
+    }
+
+    EnvironmentProxySelector(Map<String, String> environment, ProxySelector fallback, HostResolver resolver) {
         httpProxy = proxy(environment, "http_proxy");
         httpsProxy = proxy(environment, "https_proxy");
         Setting bypass = setting(environment, "no_proxy");
         noProxy = bypass.value().split(",");
         noProxyVariable = bypass.name();
         this.fallback = fallback;
+        this.resolver = resolver;
+        String debugValue = environment.getOrDefault("ZRLOG_PROXY_DEBUG", "").trim();
+        debug = "1".equals(debugValue) || "true".equalsIgnoreCase(debugValue);
     }
 
     String describe(URI uri) {
@@ -41,7 +56,7 @@ final class EnvironmentProxySelector extends ProxySelector {
         }
         Endpoint endpoint = endpoint(uri);
         if (endpoint != null) return describe(endpoint.proxy()) + " (" + endpoint.variable() + ")";
-        for (Proxy proxy : select(uri)) {
+        for (Proxy proxy : selectedProxies(uri)) {
             if (proxy.type() == Proxy.Type.HTTP) return describe(proxy) + " (runtime settings)";
         }
         return "direct (no proxy selected for " + uri.getScheme() + ")";
@@ -57,7 +72,7 @@ final class EnvironmentProxySelector extends ProxySelector {
     String authorization(URI uri) {
         Endpoint endpoint = endpoint(uri);
         if (endpoint == null || endpoint.credentials() == null
-                || !select(uri).equals(List.of(endpoint.proxy()))) return null;
+                || !selectedProxies(uri).equals(List.of(endpoint.proxy()))) return null;
         PasswordAuthentication credentials = endpoint.credentials();
         String userPass = credentials.getUserName() + ":" + new String(credentials.getPassword());
         return "Basic " + Base64.getEncoder().encodeToString(userPass.getBytes(StandardCharsets.UTF_8));
@@ -65,6 +80,50 @@ final class EnvironmentProxySelector extends ProxySelector {
 
     @Override
     public List<Proxy> select(URI uri) {
+        List<Proxy> selected = selectedProxies(uri);
+        Endpoint endpoint = endpoint(uri);
+        if (endpoint != null && selected.equals(List.of(endpoint.proxy()))) {
+            selected = List.of(resolveProxy(endpoint.proxy()));
+        }
+        if (debug) logSelection(uri, selected);
+        return selected;
+    }
+
+    private Proxy resolveProxy(Proxy proxy) {
+        var address = (InetSocketAddress) proxy.address();
+        String host = address.getHostString();
+        try {
+            InetAddress[] addresses = resolver.lookup(host);
+            if (addresses.length == 0) return proxy;
+            InetAddress chosen = addresses[0];
+            for (InetAddress candidate : addresses) {
+                if (candidate instanceof Inet6Address) {
+                    chosen = candidate;
+                    break;
+                }
+            }
+            // Keep the configured hostname for proxy authentication, including IPv6
+            // literals, while pinning the address so HttpClient cannot resolve it
+            // again and pick an IPv4 entry ahead of an available IPv6 entry.
+            InetAddress named = chosen instanceof Inet6Address ipv6
+                    ? Inet6Address.getByAddress(host, ipv6.getAddress(), ipv6.getScopeId())
+                    : InetAddress.getByAddress(host, chosen.getAddress());
+            return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(named, address.getPort()));
+        } catch (UnknownHostException ignored) {
+            // Preserve the configured route and let HttpClient report its normal
+            // connection failure. A lookup failure must never select DIRECT.
+            return proxy;
+        }
+    }
+
+    @FunctionalInterface
+    interface HostResolver {
+        InetAddress[] lookup(String host) throws UnknownHostException;
+    }
+
+    // Helper lookups for authentication/error descriptions must not produce a
+    // transport selection event. Only the public ProxySelector callback logs.
+    private List<Proxy> selectedProxies(URI uri) {
         Objects.requireNonNull(uri, "uri");
         String scheme = uri.getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) return DIRECT;
@@ -75,6 +134,29 @@ final class EnvironmentProxySelector extends ProxySelector {
         Endpoint endpoint = endpoint(uri);
         if (endpoint != null) return List.of(endpoint.proxy());
         return fallback == null ? DIRECT : fallback.select(uri);
+    }
+
+    private static void logSelection(URI uri, List<Proxy> selected) {
+        JsonObject event = new JsonObject();
+        event.addProperty("scheme", uri.getScheme());
+        event.addProperty("host", uri.getHost());
+        event.addProperty("port", uri.getPort() == -1
+                ? ("https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80) : uri.getPort());
+        JsonArray proxies = new JsonArray();
+        for (Proxy proxy : selected) {
+            JsonObject item = new JsonObject();
+            item.addProperty("type", proxy.type().name());
+            if (proxy.address() instanceof InetSocketAddress address) {
+                item.addProperty("host", address.getHostString());
+                item.addProperty("port", address.getPort());
+                item.addProperty("unresolved", address.isUnresolved());
+                if (!address.isUnresolved()) item.addProperty("address", address.getAddress().getHostAddress());
+            }
+            proxies.add(item);
+        }
+        event.add("proxies", proxies);
+        // Never log userinfo, URL path/query/fragment, authentication or request headers.
+        System.err.println("[proxy-select] " + event);
     }
 
     Authenticator authenticator() {
@@ -89,7 +171,7 @@ final class EnvironmentProxySelector extends ProxySelector {
                     URI target = getRequestingURL().toURI();
                     Endpoint endpoint = endpoint(target);
                     if (endpoint == null || endpoint.credentials() == null
-                            || !select(target).equals(List.of(endpoint.proxy()))) return null;
+                            || !selectedProxies(target).equals(List.of(endpoint.proxy()))) return null;
                     var address = (InetSocketAddress) endpoint.proxy().address();
                     if (address.getPort() != getRequestingPort()
                             || !normalizeHost(address.getHostString()).equals(normalizeHost(getRequestingHost()))) return null;

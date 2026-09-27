@@ -1,5 +1,7 @@
 package com.zrlog.client;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.zrlog.client.auth.CredentialStore;
 import com.zrlog.client.auth.OAuthTokens;
 import okhttp3.mockwebserver.MockResponse;
@@ -34,21 +36,22 @@ class ProxyEnvironmentHttpTest {
     @Test
     void routesApiRequestsThroughHttpProxyAndKeepsHeadersAndContextPath() throws Exception {
         try (MockWebServer proxy = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             proxy.enqueue(new MockResponse().setBody(CATEGORIES));
-            Result result = run(Map.of("HTTP_PROXY", proxy.url("/").toString()),
+            Result result = run(Map.of("HTTP_PROXY", "http://127.0.0.1:" + proxy.getPort()),
                     "--site", SITE, "--token", "test-token", "category", "list");
             assertEquals(0, result.exitCode(), result.output());
             RecordedRequest request = take(proxy);
             assertEquals("GET " + SITE + "/api/admin/article-type HTTP/1.1", request.getRequestLine());
             assertEquals("test-token", request.getHeader("X-ZrLog-Admin-Token"));
+            assertFalse(result.output().contains("[proxy-select]"));
         }
     }
 
     @Test
     void authenticatesTheFirstHttpProxyRequestWithDecodedCredentialsAndPreservesBearerToken() throws Exception {
         try (MockWebServer proxy = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             proxy.setDispatcher(new Dispatcher() {
                 @Override public MockResponse dispatch(RecordedRequest request) {
                     return proxyAuthorization().equals(request.getHeader("Proxy-Authorization"))
@@ -70,16 +73,17 @@ class ProxyEnvironmentHttpTest {
     @Test
     void bypassesProxyForNoProxyHosts() throws Exception {
         try (MockWebServer proxy = new MockWebServer(); MockWebServer origin = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             origin.start();
             origin.enqueue(new MockResponse().setBody(CATEGORIES));
-            Result result = run(Map.of("HTTP_PROXY", authenticatedUrl(proxy), "NO_PROXY", "localhost,127.0.0.1"),
+            Result result = run(Map.of("HTTP_PROXY", authenticatedUrl(proxy), "NO_PROXY", "localhost,127.0.0.1", "ZRLOG_PROXY_DEBUG", "1"),
                     "--site", origin.url("/sub").toString(), "--token", "test-token", "category", "list");
             assertEquals(0, result.exitCode(), result.output());
             RecordedRequest direct = take(origin);
             assertEquals("/sub/api/admin/article-type", direct.getPath());
             assertNull(direct.getHeader("Proxy-Authorization"));
             assertEquals(0, proxy.getRequestCount());
+            assertEquals("DIRECT", selection(result).getAsJsonArray("proxies").get(0).getAsJsonObject().get("type").getAsString());
         }
     }
 
@@ -103,7 +107,7 @@ class ProxyEnvironmentHttpTest {
     @Test
     void doesNotSendProxyCredentialsInResponseToOriginAuthenticationChallenges() throws Exception {
         try (MockWebServer proxy = new MockWebServer(); MockWebServer origin = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             origin.start();
             origin.enqueue(new MockResponse().setResponseCode(401).addHeader("WWW-Authenticate", "Basic realm=origin"));
             Result result = run(Map.of("HTTP_PROXY", authenticatedUrl(proxy), "NO_PROXY", "*"),
@@ -120,7 +124,7 @@ class ProxyEnvironmentHttpTest {
     @Test
     void reportsRejectedProxyCredentialsWithoutUnboundedRetriesOrLeakingSecrets() throws Exception {
         try (MockWebServer proxy = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             for (int i = 0; i < 8; i++) proxy.enqueue(challenge());
             Result result = run(Map.of("HTTP_PROXY", authenticatedUrl(proxy)),
                     "--site", SITE, "--token", "test-token", "category", "list");
@@ -136,12 +140,12 @@ class ProxyEnvironmentHttpTest {
         var store = new CredentialStore(directory.resolve("zrlog/credentials"), SITE);
         store.update(old -> new OAuthTokens(SITE, "a".repeat(43), "r".repeat(43), 1, "taxonomy.read offline_access"));
         try (MockWebServer proxy = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             proxy.enqueue(new MockResponse().setBody("""
                     {"access_token":"%s","refresh_token":"%s","expires_in":600,"token_type":"Bearer"}
                     """.formatted("b".repeat(43), "s".repeat(43))));
             proxy.enqueue(new MockResponse().setBody(CATEGORIES));
-            Map<String, String> environment = Map.of("all_proxy", proxy.url("/").toString());
+            Map<String, String> environment = Map.of("all_proxy", "http://127.0.0.1:" + proxy.getPort());
             Result refresh = run(environment, "--site", SITE, "category", "list");
             assertEquals(0, refresh.exitCode(), refresh.output());
             RecordedRequest token = take(proxy);
@@ -163,18 +167,20 @@ class ProxyEnvironmentHttpTest {
         new CredentialStore(directory.resolve("zrlog/credentials"), site).update(old ->
                 new OAuthTokens(site, "a".repeat(43), "r".repeat(43), 1, "offline_access"));
         try (MockWebServer proxy = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             proxy.enqueue(new MockResponse().setResponseCode(502));
             String[] args = switch (command) {
                 case "api" -> new String[]{"--site", site, "--token", "test-token", "article", "list"};
                 case "oauth" -> new String[]{"--site", site, "logout"};
                 default -> new String[]{"update", "check"};
             };
-            Result result = run(Map.of("HTTPS_PROXY", authenticate ? authenticatedUrl(proxy) : proxy.url("/").toString()), args);
+            Result result = run(Map.of("HTTPS_PROXY", authenticate ? authenticatedUrl(proxy) : "http://127.0.0.1:" + proxy.getPort(),
+                    "ZRLOG_PROXY_DEBUG", "1"), args);
             assertEquals(command.equals("update") ? 8 : 5, result.exitCode(), result.output());
-            assertTrue(result.output().contains("[route: HTTP proxy localhost:" + proxy.getPort() + " (HTTPS_PROXY)]"), result.output());
+            assertTrue(result.output().contains("[route: HTTP proxy 127.0.0.1:" + proxy.getPort() + " (HTTPS_PROXY)]"), result.output());
             RecordedRequest tunnel = take(proxy);
             String host = command.equals("update") ? "dl.zrlog.com" : "blog.invalid";
+            assertSelection(result, "https", host, 443, "127.0.0.1", proxy.getPort());
             assertEquals("CONNECT " + host + ":443 HTTP/1.1", tunnel.getRequestLine());
             assertNull(tunnel.getHeader("Authorization"));
             assertNull(tunnel.getHeader("X-ZrLog-Admin-Token"));
@@ -187,13 +193,13 @@ class ProxyEnvironmentHttpTest {
     @Test
     void lowerCaseHttpsProxyWinsOverAnUnreachableUppercaseProxyForArticleList() throws Exception {
         try (MockWebServer proxy = new MockWebServer()) {
-            proxy.start();
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             proxy.enqueue(new MockResponse().setResponseCode(502));
             Result result = run(Map.of("https_proxy", authenticatedUrl(proxy), "HTTPS_PROXY", "http://127.0.0.1:19999"),
                     "--site", "https://blog.invalid", "--token", "test-token", "article", "list");
             assertEquals(5, result.exitCode(), result.output());
             assertEquals("CONNECT blog.invalid:443 HTTP/1.1", take(proxy).getRequestLine());
-            assertTrue(result.output().contains("[route: HTTP proxy localhost:" + proxy.getPort() + " (https_proxy)]"), result.output());
+            assertTrue(result.output().contains("[route: HTTP proxy 127.0.0.1:" + proxy.getPort() + " (https_proxy)]"), result.output());
         }
     }
 
@@ -209,7 +215,7 @@ class ProxyEnvironmentHttpTest {
             String proxyHost = hostname ? "v6-proxy.invalid" : "[::1]";
             String proxyUrl = "http://u%40ser+name:p%3Aa%40ss%25+word@" + proxyHost + ":" + proxy.getPort();
             Result result = runWithProperties(List.of("-Djdk.net.hosts.file=" + hosts),
-                    Map.of(scheme + "_proxy", proxyUrl), "--site", tunnel ? "https://blog.invalid/sub" : SITE,
+                    Map.of(scheme + "_proxy", proxyUrl, "ZRLOG_PROXY_DEBUG", "true"), "--site", tunnel ? "https://blog.invalid/sub" : SITE,
                     "--token", "test-token", "category", "list");
             assertEquals(tunnel ? 5 : 0, result.exitCode(), result.output());
             RecordedRequest request = take(proxy);
@@ -219,6 +225,33 @@ class ProxyEnvironmentHttpTest {
             assertEquals(tunnel ? null : "test-token", request.getHeader("X-ZrLog-Admin-Token"));
             assertNull(request.getHeader("Authorization"));
             assertEquals(1, proxy.getRequestCount());
+            assertSelection(result, scheme, tunnel ? "blog.invalid" : "127.0.0.1", tunnel ? 443 : 1, proxyHost, proxy.getPort());
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"api", "update"})
+    void usesIpv6WhenTheProxyHostnameAlsoHasAnIpv4AddressListedFirst(String command) throws Exception {
+        Path hosts = directory.resolve("mixed-hosts");
+        Files.writeString(hosts, "127.0.0.1 mixed-proxy.invalid\n::1 mixed-proxy.invalid\n");
+        try (MockWebServer ipv4 = new MockWebServer(); MockWebServer ipv6 = new MockWebServer()) {
+            ipv4.start(InetAddress.getByName("127.0.0.1"), 0);
+            ipv6.start(InetAddress.getByName("::1"), ipv4.getPort());
+            ipv4.enqueue(new MockResponse().setResponseCode(403));
+            ipv6.enqueue(new MockResponse().setResponseCode(502));
+            String[] args = command.equals("api")
+                    ? new String[]{"--site", "https://blog.invalid/sub", "--token", "test-token", "article", "list"}
+                    : new String[]{"update", "check"};
+            Result result = runWithProperties(List.of("-Djdk.net.hosts.file=" + hosts), Map.of(
+                    "HTTPS_PROXY", "http://u%40ser+name:p%3Aa%40ss%25+word@mixed-proxy.invalid:" + ipv6.getPort(),
+                    "ZRLOG_PROXY_DEBUG", "1"), args);
+            assertEquals(command.equals("api") ? 5 : 8, result.exitCode(), result.output());
+            String target = command.equals("api") ? "blog.invalid" : "dl.zrlog.com";
+            assertEquals("CONNECT " + target + ":443 HTTP/1.1", take(ipv6).getRequestLine());
+            assertEquals(0, ipv4.getRequestCount(), "The IPv4 proxy listener must never be contacted");
+            assertSelection(result, "https", target, 443, "mixed-proxy.invalid", ipv6.getPort());
+            String address = selection(result).getAsJsonArray("proxies").get(0).getAsJsonObject().get("address").getAsString();
+            assertEquals(InetAddress.getByName("::1"), InetAddress.getByName(address));
         }
     }
 
@@ -235,11 +268,37 @@ class ProxyEnvironmentHttpTest {
     }
 
     private static String authenticatedUrl(MockWebServer proxy) {
-        return "http://u%40ser+name:p%3Aa%40ss%25+word@localhost:" + proxy.getPort();
+        return "http://u%40ser+name:p%3Aa%40ss%25+word@127.0.0.1:" + proxy.getPort();
     }
 
     private static String proxyAuthorization() {
         return "Basic " + Base64.getEncoder().encodeToString("u@ser+name:p:a@ss%+word".getBytes(StandardCharsets.ISO_8859_1));
+    }
+
+    private static JsonObject selection(Result result) {
+        List<String> events = result.output().lines().filter(line -> line.startsWith("[proxy-select] ")).toList();
+        // One actual transport selection for one CONNECT, including authenticated
+        // requests and failures; header preparation and error formatting add none.
+        assertEquals(1, events.size(), result.output());
+        assertFalse(events.getFirst().contains("p%3Aa%40ss%25+word"));
+        assertFalse(events.getFirst().contains("p:a@ss%+word"));
+        assertFalse(events.getFirst().contains("test-token"));
+        assertFalse(events.getFirst().contains(proxyAuthorization()));
+        return JsonParser.parseString(events.getFirst().substring("[proxy-select] ".length())).getAsJsonObject();
+    }
+
+    private static void assertSelection(Result result, String scheme, String host, int port, String proxyHost, int proxyPort) {
+        JsonObject event = selection(result);
+        assertEquals(scheme, event.get("scheme").getAsString());
+        assertEquals(host, event.get("host").getAsString());
+        assertEquals(port, event.get("port").getAsInt());
+        assertEquals(1, event.getAsJsonArray("proxies").size());
+        JsonObject proxy = event.getAsJsonArray("proxies").get(0).getAsJsonObject();
+        assertEquals("HTTP", proxy.get("type").getAsString());
+        assertEquals(proxyHost.replace("[", "").replace("]", ""), proxy.get("host").getAsString());
+        assertEquals(proxyPort, proxy.get("port").getAsInt());
+        assertFalse(proxy.get("unresolved").getAsBoolean());
+        assertTrue(proxy.has("address"));
     }
 
     private Result run(Map<String, String> environment, String... args) throws Exception {
