@@ -43,8 +43,8 @@ class Origin(http.server.BaseHTTPRequestHandler):
     def record(self):
         self.server.requests.append((self.command, self.path, self.headers))
 
-    def respond(self, code=200):
-        payload = json.dumps(ARTICLES).encode() if code == 200 else b""
+    def respond(self, code=200, value=ARTICLES):
+        payload = json.dumps(value).encode() if code == 200 else b""
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
@@ -53,7 +53,21 @@ class Origin(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.record()
-        self.respond()
+        if self.path == "/ctl/release/latest.json":
+            self.respond(value={"version": "0.1.0", "url": "https://dl.zrlog.com/ctl/release/0.1.0/zrlogctl-linux-amd64",
+                                "sha256": "a" * 64, "size": 1})
+        else:
+            self.respond()
+
+
+class BlockedIPv4Proxy(Origin):
+    """Model a policy interceptor on the wrong address of a dual-stack proxy."""
+    def do_CONNECT(self):
+        self.record()
+        self.connection.sendall(b"cross-address-family-policy-test\r\n\r\n")
+        self.close_connection = True
+
+    do_GET = do_CONNECT
 
 
 class Proxy(Origin):
@@ -100,14 +114,16 @@ def main(binary):
         cert, key, trust = [directory / name for name in ("cert.pem", "key.pem", "trust.p12")]
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
                         "-keyout", str(key), "-out", str(cert), "-subj", "/CN=blog.invalid",
-                        "-addext", "subjectAltName=DNS:blog.invalid"], check=True, capture_output=True)
+                        "-addext", "subjectAltName=DNS:blog.invalid,DNS:dl.zrlog.com"], check=True, capture_output=True)
         keytool = str(Path(os.environ["JAVA_HOME"]) / "bin/keytool") if os.environ.get("JAVA_HOME") else "keytool"
         subprocess.run([keytool, "-importcert", "-noprompt", "-alias", "test-origin", "-file", str(cert),
                         "-keystore", str(trust), "-storetype", "PKCS12", "-storepass", "local-test"],
                        check=True, capture_output=True)
         hosts = directory / "hosts"
-        # Only an IPv6 address exists for the proxy; the origin has only IPv4.
-        hosts.write_text("::1 v6-proxy.invalid\n127.0.0.1 blog.invalid\n")
+        # Deliberately list IPv4 first for the mixed proxy. Only its IPv6 listener
+        # can forward requests; its IPv4 listener returns a plaintext policy error.
+        hosts.write_text("127.0.0.1 mixed-proxy.invalid\n::1 mixed-proxy.invalid\n"
+                         "::1 v6-proxy.invalid\n127.0.0.1 blog.invalid\n")
         environment = {name: value for name, value in os.environ.items()
                        if not name.lower().endswith("_proxy") and not name.startswith("ZRLOG_")
                        and name not in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")}
@@ -128,10 +144,11 @@ def main(binary):
         start(origin)
         ipv4_proxy = start(Server(("127.0.0.1", 0), Proxy))
         ipv6_proxy = start(IPv6Server(("::1", 0), Proxy))
+        blocked_ipv4 = start(Server(("127.0.0.1", ipv6_proxy.server_port), BlockedIPv4Proxy))
         ipv4_proxy.origin_port = ipv6_proxy.origin_port = origin.server_port
         site = f"https://blog.invalid:{origin.server_port}/sub"
 
-        def run(proxy_url, secure=True, expected=0, trust_cert=True):
+        def run(proxy_url, secure=True, expected=0, trust_cert=True, command="article", debug=False):
             properties = [f"-Djdk.net.hosts.file={hosts}"]
             if trust_cert:
                 properties += [f"-Djavax.net.ssl.trustStore={trust}", "-Djavax.net.ssl.trustStorePassword=local-test"]
@@ -139,14 +156,19 @@ def main(binary):
             env = environment | {name: proxy_url for name in (
                 "https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY")}
             env.update(no_proxy="", NO_PROXY="")
-            result = subprocess.run([binary, *properties, "--timeout", "5", "--site",
-                                     site if secure else "http://127.0.0.1:1/sub",
-                                     "--token", "test-token", "article", "list"],
+            if debug:
+                env["ZRLOG_PROXY_DEBUG"] = "1"
+            args = ["--timeout", "5", "--site", site if secure else "http://127.0.0.1:1/sub",
+                    "--token", "test-token", "article", "list"] if command == "article" else ["update", "check"]
+            result = subprocess.run([binary, *properties, *args],
                                     env=env, cwd=temporary, capture_output=True, text=True, timeout=15)
             assert result.returncode == expected, (result.returncode, result.stdout, result.stderr)
+            if not debug:
+                assert "[proxy-select]" not in result.stderr, result.stderr
             return result
 
-        for host, proxy in (("127.0.0.1", ipv4_proxy), ("[::1]", ipv6_proxy), ("v6-proxy.invalid", ipv6_proxy)):
+        for host, proxy in (("127.0.0.1", ipv4_proxy), ("[::1]", ipv6_proxy),
+                            ("v6-proxy.invalid", ipv6_proxy), ("mixed-proxy.invalid", ipv6_proxy)):
             proxy_url = f"http://{USERINFO}@{host}:{proxy.server_port}"
             for secure in (False, True):
                 before_proxy, before_origin = len(proxy.requests), len(origin.requests)
@@ -166,6 +188,23 @@ def main(binary):
                     assert (method, path) == ("GET", "http://127.0.0.1:1" + ARTICLE_PATH)
                 assert headers.get("X-ZrLog-Admin-Token") == "test-token"
                 print(f"PASS {host}: {'HTTPS CONNECT to IPv4 origin' if secure else 'HTTP forwarding'}, first-request authentication")
+
+        # This runs with the mixed hostname after the HTTP/HTTPS success checks,
+        # so the pre-fix binary first reproduces the real wrong-address failure.
+        for command in ("article", "update"):
+            result = run(proxy_url, command=command, debug=True)
+            events = [json.loads(line.removeprefix("[proxy-select] ")) for line in result.stderr.splitlines()
+                      if line.startswith("[proxy-select] ")]
+            assert len(events) == 1, result.stderr
+            selected = events[0]["proxies"]
+            assert len(selected) == 1 and selected[0]["type"] == "HTTP", events
+            assert not selected[0]["unresolved"] and ":" in selected[0]["address"], events
+            assert selected[0]["port"] == ipv6_proxy.server_port, events
+            assert all(secret not in result.stderr for secret in (USERINFO, PROXY_AUTH, "p:a@ss%+word", "test-token"))
+            target = "dl.zrlog.com:443" if command == "update" else f"blog.invalid:{origin.server_port}"
+            assert ipv6_proxy.requests[-1][0:2] == ("CONNECT", target)
+            assert not blocked_ipv4.requests, "The IPv4 policy interceptor must never be contacted"
+            print(f"PASS mixed proxy {command}: actual selector returns IPv6; debug output omits credentials")
 
         before_origin = len(origin.requests)
         run(proxy_url, expected=5, trust_cert=False)

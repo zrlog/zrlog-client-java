@@ -88,11 +88,22 @@ zrlogctl update check
 
 支持只有 IPv6 地址的代理主机名，例如 `http://user:pass@proxy.example:3128`。直接填写 IPv6 地址时，地址需加方括号，例如 `http://user:pass@[2001:db8::1]:3128`。客户端连接代理，由代理通过 CONNECT 连接 HTTPS 目标；代理与目标可以分别使用 IPv6 和 IPv4，无需强制 IPv4。
 
+环境代理主机名同时有 IPv4 和 IPv6 地址时，客户端通过 `InetAddress.getAllByName()` 获取全部地址，优先选择 IPv6，并将已解析的地址交给 HTTP client，避免再次解析选回排在前面的 IPv4。只有 IPv4 地址时继续使用 IPv4；此策略仅作用于环境变量指定的代理，不修改 JVM 全局地址族设置。选中的代理不通会报错，不回退直连；需指定某个地址时可直接填写 IPv4 或带方括号的 IPv6 地址。
+
 `no_proxy` / `NO_PROXY` 是逗号分隔的直连列表，优先于代理和运行时默认设置。支持域名及其子域、前导 `.` / `*.`、IPv4/IPv6 地址、可选端口（IPv6 带端口时使用 `[::1]:8080`），以及表示全部直连的 `*`；不支持 CIDR 网段。代理变量只读取进程环境，不读取项目 `.env`；桌面代理工具需开启 HTTP 或混合端口并导出上述变量。通过 `sudo` 更新时，也需确保管理员进程收到这些变量。
 
 网络连接失败时，错误末尾会显示所选代理地址和变量名，例如 `[route: HTTP proxy 127.0.0.1:19999 (https_proxy)]`；命中直连列表时显示 `[route: direct (NO_PROXY)]`。这些信息不含代理用户名或密码。若大小写变量同时存在，仅修改大写值不会覆盖非空的小写值；HTTPS 站点需设置 `https_proxy` / `HTTPS_PROXY` 或 `all_proxy` / `ALL_PROXY`，单独设置 `HTTP_PROXY` 不会影响 HTTPS 请求。
 
 `route` 标签仅表示客户端选择的代理配置，不能证明 TCP 连接已到达代理。排查时应结合代理端连接日志或 `strace -f -e trace=connect,getsockopt` 查看实际 socket 目标。用不存在的端口测试时，需同时覆盖大小写代理变量并清空 `no_proxy` / `NO_PROXY`，避免其他环境配置影响结果。
+
+设置 `ZRLOG_PROXY_DEBUG=1`（或 `true`）后，真正调用 `ProxySelector.select(URI)` 时会向 stderr 输出 `[proxy-select]` JSON，记录目标协议/主机/端口和返回的每个代理的类型、主机、端口、解析状态与选中 IP。认证准备和错误说明的内部查询不会产生此日志；日志不含代理凭据、请求头、URL 路径或查询参数。可结合 JDK 的 `channel` 日志查看实际 `SocketChannel` 的 `remote` 地址：
+
+```bash
+ZRLOG_PROXY_DEBUG=1 zrlogctl -Djdk.httpclient.HttpClient.log=channel update check
+ZRLOG_PROXY_DEBUG=1 zrlogctl -Djdk.httpclient.HttpClient.log=channel article list
+```
+
+`[proxy-select]` 是 selector 返回值，`SocketChannel[... remote=...]` 是连接的远端地址；JDK 日志中的 `socket://目标站点:443/ CONNECT` 是隧道目标，不代表 TCP 直连该站点。不要为排查代理而开启 `headers` 日志，以免输出认证请求头。
 
 ## 常用命令
 
@@ -147,6 +158,8 @@ zrlogctl article list --output json
 
 `static-error`、`publish-error`、`sse-error` 会导致失败退出；连接中断、超时或缺少 `publish-complete` 也不会报告发布成功。此时文章可能已经保存，客户端不会自动重试写入，应先检查远端文章状态。发布检查的 `publish-check-error` 是提示，仍以最终发布完成事件为准。兼容旧服务端的普通 JSON 响应时，会提示无法确认静态同步完成，并继续校验已保存的文章。
 
+保存响应超时后的自动 GET 对账需求作为[独立问题](docs/article-save-timeout.md)跟踪。
+
 完整 front matter 约定见 [docs/content-format.md](docs/content-format.md)，示例位于 [examples](examples)。AI 写作风格、语料审阅和发布证据属于具体内容工程，不由 `zrlogctl` 强制。
 
 主题上传支持 ZIP 文件或主题目录。ZIP 文件名或目录名会作为主题标识，必须以字母或数字开头，后续只能使用字母、数字、点、下划线和连字符，最长 128 个字符。目录模式由客户端在本地压缩，主题文件直接位于 ZIP 根目录；客户端不会跟随符号链接，并默认排除 `.git`、`.svn`、`.hg`、`.bzr`、`.idea`、`.vscode`、`.cache`、`node_modules`、`.env*`、凭据/密钥、数据库、日志和转储文件。ZIP 可以直接包含主题文件，也可以包含一个外层目录；主题包至少应包含 `template.properties` 和入口模板。`template-travel` 示例中的 `template.properties`、`index.ftl`、`page.ftl` 和 `detail.ftl` 可作为主题包结构参考。上传不会自动切换当前主题，覆盖已有主题必须显式传入 `--overwrite`。
@@ -189,6 +202,6 @@ zrlogctl update apply
 ./bin/package-linux-amd64.sh /tmp/zrlogctl-release
 ```
 
-打包脚本在生成发布文件前运行 `python3 bin/test-native-proxy.py target/zrlogctl`。测试启动本机认证代理和 IPv4 HTTPS 服务，实际运行 `article list`，覆盖 IPv4、IPv6 字面量、仅解析到 IPv6 的代理主机名、首次 CONNECT 认证、代理凭据隔离及死端口禁止回退直连。证书和 hosts 文件均为临时测试数据，不依赖外部网络或真实令牌。
+打包脚本在生成发布文件前运行 `python3 bin/test-native-proxy.py target/zrlogctl`。测试启动本机认证代理和 IPv4 HTTPS 服务，实际运行 `article list` 和 `update check`，覆盖 IPv4、IPv6 字面量、仅解析到 IPv6 的代理主机名、IPv4 排在前面的双地址代理、首次 CONNECT 认证、代理凭据隔离及死端口禁止回退直连。双地址测试让 IPv4 监听器返回策略明文，要求请求只到达正常转发的 IPv6 监听器。证书和 hosts 文件均为临时测试数据，不依赖外部网络或真实令牌。
 
 版本由 `pom.xml` 的 `0.1` 基础版本和构建号组成，例如 `0.1.42`。脚本优先读取 `BUILD_NUMBER`，本地未设置时使用 Git 提交数；CI 使用 GitHub Actions run number。脚本拒绝非 Linux AMD64 平台，并生成可以直接同步到下载站的 `ctl/release` 目录。项目不构建或分发通用 Jar。
