@@ -36,7 +36,7 @@ import java.util.concurrent.Callable;
 public class Application implements Runnable {
 
     @Option(names = "--site", scope = CommandLine.ScopeType.INHERIT,
-            description = "ZrLog base URL, including an optional context path (defaults to the last login)")
+            description = "ZrLog base URL, including an optional context path (defaults to environment, .env, zrlog.json, or last login)")
     String site;
 
     @Option(names = "--token-file", scope = CommandLine.ScopeType.INHERIT,
@@ -57,6 +57,7 @@ public class Application implements Runnable {
 
     Map<String, String> environment = System.getenv();
     Path dotenvPath = Path.of(".env");
+    Path projectConfigPath = Path.of(ProjectConfig.FILE_NAME);
     private Map<String, String> dotenv;
     java.util.function.Consumer<java.net.URI> browser = OAuthLogin::openBrowser;
 
@@ -116,7 +117,7 @@ public class Application implements Runnable {
         String resolvedSite = resolvedSite();
         String token = resolvedToken();
         if (resolvedSite == null || resolvedSite.isBlank()) {
-            throw new ApiException("Run zrlogctl login --site <URL>, or set --site or ZRLOG_SITE_URL (environment or .env)", 3, null, null);
+            throw new ApiException("Run zrlogctl login --site <URL>, set site_url in zrlog.json, or set ZRLOG_SITE_URL (environment or .env)", 3, null, null);
         }
         if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
         try {
@@ -143,7 +144,12 @@ public class Application implements Runnable {
     }
 
     private String resolvedSite() {
-        String configured = first(site, first(environment.get("ZRLOG_SITE_URL"), dotenv().get("ZRLOG_SITE_URL")));
+        if (site != null) return site;
+        String configured = environment.get("ZRLOG_SITE_URL");
+        if (configured != null) return configured;
+        configured = dotenv().get("ZRLOG_SITE_URL");
+        if (configured != null) return configured;
+        configured = projectConfig().site();
         return configured != null ? configured : siteConfig().defaultSite();
     }
 
@@ -163,7 +169,7 @@ public class Application implements Runnable {
         return !environment.containsKey("ZRLOG_ADMIN_TOKEN") && dotenv().containsKey("ZRLOG_ACCESS_TOKEN");
     }
     private OAuthLogin oauthLogin(String resolvedSite) {
-        if (resolvedSite == null || resolvedSite.isBlank()) throw new ApiException("Set --site or ZRLOG_SITE_URL", 3, null, null);
+        if (resolvedSite == null || resolvedSite.isBlank()) throw new ApiException("Set --site, site_url in zrlog.json, or ZRLOG_SITE_URL", 3, null, null);
         if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
         try { return new OAuthLogin(java.net.URI.create(resolvedSite), Duration.ofSeconds(timeout)); }
         catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
@@ -178,24 +184,37 @@ public class Application implements Runnable {
     private SiteConfig siteConfig() {
         return new SiteConfig(configDirectory());
     }
+    private ProjectConfig projectConfig() {
+        return new ProjectConfig(projectConfigPath);
+    }
 
     @Command(name = "login", description = "Authorize zrlogctl through your browser")
     static class Login implements Callable<Integer> {
+        private static final List<String> DEFAULT_PERMISSIONS = List.of(
+                "article.read", "article.create", "article.update", "article.publish",
+                "taxonomy.read", "taxonomy.manage", "asset.upload", "site.configure", "notification.create");
         @ParentCommand Application root;
         @Option(names = "--no-browser", description = "Print the authorization URL without opening a browser") boolean noBrowser;
-        @Option(names = "--permissions", split = ",", description = "Request specific account action IDs; otherwise choose permissions in the browser") List<String> permissions;
+        @Option(names = "--permissions", split = ",", description = "Request only these account action IDs (defaults to article publishing, categories, uploads, themes, and notifications)") List<String> permissions;
+        @Option(names = "--inherit-permissions", description = "Allow choosing inherited account permissions in the browser instead of the default CLI permissions") boolean inheritPermissions;
         @Option(names = "--wait", defaultValue = "300", description = "Seconds to wait for browser authorization") int wait;
         public Integer call() {
             if (wait < 1 || wait > 1800) throw new ApiException("--wait must be between 1 and 1800 seconds", 3, null, null);
+            if (inheritPermissions && permissions != null)
+                throw new ApiException("Use only one of --permissions and --inherit-permissions", 3, null, null);
             if (permissions != null && (permissions.isEmpty() || permissions.stream().anyMatch(p -> !p.matches("[a-z_]+(?:\\.[a-z_]+)+"))))
                 throw new ApiException("--permissions must contain account action IDs", 3, null, null);
+            ProjectConfig project = root.projectConfig();
+            project.site();
             OAuthLogin login = root.oauthLogin(root.resolvedSite());
-            String scope = (permissions == null ? "account:inherit" : String.join(" ", permissions)) + " offline_access";
+            String scope = (inheritPermissions ? "account:inherit"
+                    : String.join(" ", permissions == null ? DEFAULT_PERMISSIONS : permissions)) + " offline_access";
             OAuthTokens tokens = login.login(scope, Duration.ofSeconds(wait), uri -> {
                 System.err.println("Open this URL to authorize zrlogctl:\n" + uri);
                 if (!noBrowser) root.browser.accept(uri);
             });
             root.credentialStore(login).update(previous -> tokens);
+            project.saveSite(login.issuer());
             root.siteConfig().saveDefaultSite(login.issuer());
             root.emit(Map.of("site", login.issuer(), "scope", tokens.scope()), "Signed in to " + login.issuer());
             return 0;

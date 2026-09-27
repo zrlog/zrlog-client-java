@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 import java.io.PrintWriter;
+import java.io.IOException;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -240,6 +241,9 @@ class ApplicationTest {
             authorizeInBrowser(app, server.url("/sub").toString(), false);
             assertEquals(0,Application.commandLine(app).execute("login", "--site", server.url("/sub/").toString()));
             assertEquals("/sub/oauth/token",server.takeRequest().getPath());
+            assertEquals(Map.of("site_url", server.url("/sub").toString()),
+                    JsonSupport.GSON.fromJson(Files.readString(app.projectConfigPath), Map.class));
+            assertTrue(Files.notExists(app.dotenvPath));
             Path defaultSite = temporary.resolve("config/zrlog/default-site");
             assertEquals(server.url("/sub").toString(), Files.readString(defaultSite).trim());
             assertEquals(Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
@@ -268,16 +272,113 @@ class ApplicationTest {
         saved.saveDefaultSite("https://saved.example/sub");
         Path dotenv = temporary.resolve(".env");
         Files.writeString(dotenv, "ZRLOG_SITE_URL=https://dotenv.example/sub\n");
-        for (String source : List.of("saved", "dotenv", "environment", "command")) {
+        Path project = temporary.resolve("zrlog.json");
+        Files.writeString(project, "{\"site_url\":\"https://project.example/sub\"}\n");
+        for (String source : List.of("saved", "project", "dotenv", "environment", "command")) {
             Application app = isolatedApplication("tmp");
             app.tokenValue = "test-token";
-            if (!source.equals("saved")) app.dotenvPath = dotenv;
+            if (!source.equals("saved")) app.projectConfigPath = project;
+            if (!source.equals("saved") && !source.equals("project")) app.dotenvPath = dotenv;
             if (source.equals("environment") || source.equals("command"))
                 app.environment = Map.of("XDG_CONFIG_HOME", temporary.resolve("config").toString(),
                         "ZRLOG_SITE_URL", "https://environment.example/sub");
             if (source.equals("command")) app.site = "https://command.example/sub";
             assertEquals("https://" + source + ".example/sub", app.api().http().config().baseUri().toString());
             assertEquals("https://saved.example/sub", saved.defaultSite());
+            assertEquals("{\"site_url\":\"https://project.example/sub\"}\n", Files.readString(project));
+        }
+    }
+
+    @Test void projectSiteCanBeCombinedWithAPrivateDotenvToken() throws Exception {
+        Application app = isolatedApplication("project");
+        Files.writeString(app.projectConfigPath, "{\"site_url\":\"https://blog.example/sub\"}");
+        Files.writeString(app.dotenvPath, "ZRLOG_ACCESS_TOKEN=private-access-token\n");
+        ClientConfig config = app.api().http().config();
+        assertEquals("https://blog.example/sub", config.baseUri().toString());
+        assertEquals("private-access-token", config.token());
+        assertTrue(config.bearer());
+    }
+
+    @Test void loginRequestsPublishingAndThemePermissionsByDefaultAndHonorsExplicitModes() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            String defaults = "article.read article.create article.update article.publish taxonomy.read "
+                    + "taxonomy.manage asset.upload site.configure notification.create offline_access";
+            for (String mode : List.of("default", "custom", "inherit")) {
+                Application app = isolatedApplication(mode);
+                String issuer = server.url("/sub").toString();
+                authorizeInBrowser(app, issuer, false);
+                var authorize = app.browser;
+                String expected = switch (mode) {
+                    case "custom" -> "article.read taxonomy.read offline_access";
+                    case "inherit" -> "account:inherit offline_access";
+                    default -> defaults;
+                };
+                app.browser = uri -> {
+                    var query = OAuthLogin.parameters(uri.getRawQuery());
+                    assertEquals(expected, query.get("scope"));
+                    assertEquals(issuer + "/api/admin", query.get("resource"));
+                    authorize.accept(uri);
+                };
+                // Consent can narrow the request. Save the server's actual grant, not the requested scope.
+                server.enqueue(json("{\"access_token\":\"" + "a".repeat(43)
+                        + "\",\"token_type\":\"Bearer\",\"expires_in\":600,\"scope\":\"article.read\"}"));
+                var arguments = new java.util.ArrayList<>(List.of("login", "--site", issuer));
+                if (mode.equals("custom")) arguments.addAll(List.of("--permissions", "article.read,taxonomy.read"));
+                if (mode.equals("inherit")) arguments.add("--inherit-permissions");
+                assertEquals(0, Application.commandLine(app).execute(arguments.toArray(String[]::new)));
+                assertEquals("/sub/oauth/token", server.takeRequest().getPath());
+                try (var credentials = Files.list(temporary.resolve("config/zrlog/credentials"))) {
+                    Path saved = credentials.filter(path -> path.toString().endsWith(".json")).findFirst().orElseThrow();
+                    assertEquals("article.read", JsonParser.parseString(Files.readString(saved)).getAsJsonObject().get("scope").getAsString());
+                }
+            }
+        }
+    }
+
+    @Test void loginRejectsConflictingPermissionModesBeforeAuthorization() throws Exception {
+        Application app = isolatedApplication("project");
+        app.browser = uri -> { throw new AssertionError("Browser must not be opened"); };
+        StringWriter errors = new StringWriter();
+        CommandLine command = Application.commandLine(app);
+        command.setErr(new PrintWriter(errors, true));
+        assertEquals(3, command.execute("login", "--permissions", "article.read", "--inherit-permissions"));
+        assertTrue(errors.toString().contains("Use only one"));
+        assertTrue(Files.notExists(app.projectConfigPath));
+    }
+
+    @Test void invalidProjectConfigurationStopsLoginBeforeAuthorization() throws Exception {
+        Application app = isolatedApplication("project");
+        String contents = "{\"site_url\":\"https://blog.example\",\"token\":\"secret-value\"}";
+        Files.writeString(app.projectConfigPath, contents);
+        app.browser = uri -> { throw new AssertionError("Browser must not be opened"); };
+        StringWriter errors = new StringWriter();
+        CommandLine command = Application.commandLine(app);
+        command.setErr(new PrintWriter(errors, true));
+        assertEquals(3, command.execute("login", "--site", "https://other.example"));
+        assertTrue(!errors.toString().contains("secret-value"));
+        assertEquals(contents, Files.readString(app.projectConfigPath));
+        assertTrue(Files.notExists(temporary.resolve("config/zrlog")));
+    }
+
+    @Test void projectSelectsItsOwnLoginAfterAnotherProjectChangesTheGlobalDefault() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.start();
+            for (String name : List.of("first", "second")) {
+                Application app = isolatedApplication(name);
+                String issuer = server.url("/" + name).toString();
+                Files.writeString(app.projectConfigPath, "{\"site_url\":\"" + issuer + "\"}");
+                authorizeInBrowser(app, issuer, false);
+                String token = (name.equals("first") ? "a" : "b").repeat(43);
+                server.enqueue(json("{\"access_token\":\"" + token + "\",\"token_type\":\"Bearer\",\"expires_in\":600}"));
+                assertEquals(0, Application.commandLine(app).execute("login"));
+                assertEquals("/" + name + "/oauth/token", server.takeRequest().getPath());
+            }
+            ClientConfig first = isolatedApplication("first").api().http().config();
+            assertEquals(server.url("/first").uri(), first.baseUri());
+            assertEquals("a".repeat(43), first.token());
+            assertTrue(first.bearer());
+            assertEquals(server.url("/second").uri(), isolatedApplication("elsewhere").api().http().config().baseUri());
         }
     }
 
@@ -287,12 +388,17 @@ class ApplicationTest {
             SiteConfig saved = new SiteConfig(temporary.resolve("config/zrlog"));
             for (String path : List.of("/first", "/second")) {
                 Application app = isolatedApplication("project");
+                String dotenv = "ZRLOG_ACCESS_TOKEN=existing-script-token\n";
+                Files.writeString(app.dotenvPath, dotenv);
                 String issuer = server.url(path).toString();
                 authorizeInBrowser(app, issuer, false);
                 server.enqueue(json("{\"access_token\":\"" + "a".repeat(43) + "\",\"token_type\":\"Bearer\",\"expires_in\":600}"));
                 assertEquals(0, Application.commandLine(app).execute("login", "--site", issuer));
                 assertEquals(path + "/oauth/token", server.takeRequest().getPath());
                 assertEquals(issuer, saved.defaultSite());
+                assertEquals(Map.of("site_url", issuer),
+                        JsonSupport.GSON.fromJson(Files.readString(app.projectConfigPath), Map.class));
+                assertEquals(dotenv, Files.readString(app.dotenvPath));
             }
             server.enqueue(json("{}"));
             assertEquals(0, Application.commandLine(isolatedApplication("tmp")).execute(
@@ -305,6 +411,12 @@ class ApplicationTest {
             assertEquals("/second/oauth/revoke", server.takeRequest().getPath());
             assertEquals(server.url("/second").toString(), saved.defaultSite());
             assertEquals("a".repeat(43), isolatedApplication("tmp").api().http().config().token());
+            server.enqueue(json("{}"));
+            Application logout = isolatedApplication("project");
+            String projectBeforeLogout = Files.readString(logout.projectConfigPath);
+            assertEquals(0, Application.commandLine(logout).execute("logout"));
+            assertEquals("/second/oauth/revoke", server.takeRequest().getPath());
+            assertEquals(projectBeforeLogout, Files.readString(logout.projectConfigPath));
         }
     }
 
@@ -315,18 +427,24 @@ class ApplicationTest {
             for (boolean existing : List.of(false, true)) {
                 if (existing) saved.saveDefaultSite("https://saved.example");
                 Application app = isolatedApplication("project");
+                String project = "{\"site_url\":\"https://saved.example\"}\n";
+                if (existing) Files.writeString(app.projectConfigPath, project);
                 authorizeInBrowser(app, server.url("/sub").toString(), true);
                 assertEquals(4, Application.commandLine(app).execute("login", "--site", server.url("/sub").toString()));
                 assertEquals(existing ? "https://saved.example" : null, saved.defaultSite());
+                if (existing) assertEquals(project, Files.readString(app.projectConfigPath));
+                else assertTrue(Files.notExists(app.projectConfigPath));
             }
             assertEquals(0, server.getRequestCount());
         }
     }
 
-    private Application isolatedApplication(String workingDirectory) {
+    private Application isolatedApplication(String workingDirectory) throws IOException {
         Application app = new Application();
         app.environment = Map.of("XDG_CONFIG_HOME", temporary.resolve("config").toString());
-        app.dotenvPath = temporary.resolve(workingDirectory).resolve(".env");
+        Path directory = Files.createDirectories(temporary.resolve(workingDirectory));
+        app.dotenvPath = directory.resolve(".env");
+        app.projectConfigPath = directory.resolve("zrlog.json");
         return app;
     }
 

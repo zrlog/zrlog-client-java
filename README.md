@@ -23,17 +23,44 @@ zrlogctl article list
 zrlogctl logout
 ```
 
-登录成功后会将该站点记为默认站点，之后在任意目录执行 `zrlogctl article list` 都无需重复传 `--site`。再次登录其他站点会切换默认站点；临时访问其他站点可使用 `--site`，不会改变已保存的默认值。也可以通过 `ZRLOG_SITE_URL` 环境变量或当前目录 `.env` 指定站点。升级前已登录的用户需要重新执行一次 `login --site <URL>` 来保存默认站点。
+登录成功后会在当前工作目录创建或更新 `zrlog.json`，只记录该项目的站点地址，可以提交到 Git：
+
+```json
+{
+  "site_url": "https://blog.example.com"
+}
+```
+
+也可以手动创建此文件（参见 [示例](examples/zrlog.json)），然后执行 `zrlogctl login`。客户端只读取当前工作目录的 `zrlog.json` 和 `.env`，不会向父目录查找。`zrlog.json` 只接受 `site_url`，不接受 token 等其他字段；凭证由每位使用者单独登录获取，或通过不提交到 Git 的 `.env` 提供。登录不会创建或修改 `.env`，也不会将其中的令牌复制到项目配置。
+
+登录同时更新用户的全局默认站点；在没有项目配置或其他站点覆盖的目录中，仍可直接执行 `zrlogctl article list`。在其他项目中登录不会改变本项目 `zrlog.json` 记录的站点。在当前项目重新登录其他站点，会更新本项目配置和全局默认站点；普通命令临时传入 `--site` 不会改写它们。登录取消或授权失败不会改写配置，已有项目配置无效时会在授权前报错。升级前已登录的用户可重新执行一次 `login --site <URL>` 生成项目配置。
 
 部署在子路径时使用 `zrlogctl login --site https://blog.example.com/sub`。客户端使用系统浏览器、PKCE 与本机随机端口回调，校验 state 和 issuer。没有桌面浏览器时可传 `--no-browser`，在同一台电脑的浏览器打开打印的地址；不需要输入 token。默认等待 300 秒，可用 `--wait` 调整。
 
-登录页使用现有账号权限。可传 `--permissions article.read,taxonomy.read` 限定申请范围；不传时可在浏览器选择权限或继承账号权限。保留“长期连接”授权后客户端自动刷新；撤销授权、停用账号、修改认证信息后需重新登录。
+默认登录申请现有 CLI 功能需要的明确权限，授权页会勾选其中当前账号可授予的部分，可以手动取消。权限与用途如下：
 
-凭证按站点保存到 `$XDG_CONFIG_HOME/zrlog/credentials/`（默认 `~/.config/zrlog/credentials/`），默认站点单独保存到同级的 `default-site` 文件，文件权限均为 `0600`。并发进程通过文件锁串行刷新。`logout` 先撤销服务端授权，再删除该站点本机凭证；如果退出的是默认站点，也会清除默认值，不会自动切换到其他站点。不会打印明文凭证。使用服务端配置的规范站点地址，包含部署 context path。
+| 功能 | 申请权限 |
+| --- | --- |
+| 读取文章、创建/更新草稿、发布、修订或撤回已发布文章 | `article.read`、`article.create`、`article.update`、`article.publish`、`taxonomy.read` |
+| 分类列表与同步 | `taxonomy.read`、`taxonomy.manage` |
+| 上传图片或附件 | `asset.upload` |
+| 上传或覆盖模板 | `site.configure` |
+| 发送通知 | `notification.create` |
+| 保持连接、自动刷新令牌 | `offline_access` |
+
+`site.configure` 是现有的站点配置权限，不仅限于模板上传；只有站长和管理员可以授予。作者可以发布自己的文章，但不能管理模板；投稿者没有发布权限。授权始终受账号当前权限和文章归属限制。
+
+可传 `--permissions article.read,taxonomy.read` 替换默认申请范围；仅发布文章可传 `--permissions article.read,article.create,article.update,article.publish,taxonomy.read,asset.upload`，仅上传模板可传 `--permissions site.configure`。如需继承账号权限，使用 `login --inherit-permissions`，并在浏览器明确选择“继承账号权限”；此选项不能与 `--permissions` 同时使用。`offline_access` 自动附加到申请中，保留“长期连接”授权后客户端自动刷新。
+
+旧版本默认请求继承权限，但授权页默认自定义选择只有文章读取和长期连接，直接确认会得到只读凭证。升级客户端后需重新执行 `zrlogctl login` 并确认所需权限，已有授权不会自动扩权；撤销授权、停用账号、修改认证信息后也需重新登录。
+
+凭证按站点保存到 `$XDG_CONFIG_HOME/zrlog/credentials/`（默认 `~/.config/zrlog/credentials/`），默认站点单独保存到同级的 `default-site` 文件，文件权限均为 `0600`。并发进程通过文件锁串行刷新。`logout` 先撤销服务端授权，再删除该站点本机凭证；如果退出的是默认站点，也会清除默认值，不会自动切换到其他站点。退出不会修改项目的 `zrlog.json`，下次可以直接执行 `zrlogctl login`。不会打印明文凭证。使用服务端配置的规范站点地址，包含部署 context path。
 
 博客与后台分域部署时，`--site` 填服务的对外入口，例如 `https://xiaochun-admin.zrlog.com`，并在“设置 → 管理设置 → 后端服务地址”保存同一个地址，避免 OAuth 发现和回调校验使用静态博客域名。配置字段 `backend_server_url` 不进入博客公开数据；连接客户端仍需要知道服务入口，应填写代理地址而非内部源站。未填写时继续兼容 `ZRLOG_BACKEND_URL` 环境变量。
 
-脚本也可使用个人访问令牌。站点优先级：`--site` > 环境变量 `ZRLOG_SITE_URL` > 当前目录 `.env` 中的 `ZRLOG_SITE_URL` > 已保存的默认站点。令牌优先级：命令行 > 环境变量 > 当前目录 `.env` > 对应站点的浏览器登录凭证。支持 `ZRLOG_ACCESS_TOKEN` 和兼容的 `ZRLOG_ADMIN_TOKEN`；同一层级优先使用 ACCESS_TOKEN，环境变量始终优先于 `.env`。
+脚本也可使用个人访问令牌。站点优先级：`--site` > 环境变量 `ZRLOG_SITE_URL` > 当前目录 `.env` 中的 `ZRLOG_SITE_URL` > 当前目录 `zrlog.json` 中的 `site_url` > 已保存的全局默认站点。环境变量和 `.env` 可用于本地或 CI 覆盖项目站点。
+
+令牌优先级：命令行 > 环境变量 > 当前目录 `.env` > 对应站点的浏览器登录凭证。支持 `ZRLOG_ACCESS_TOKEN` 和兼容的 `ZRLOG_ADMIN_TOKEN`；同一层级优先使用 ACCESS_TOKEN，环境变量始终优先于 `.env`。站点和令牌分别选择；新增项目配置不会禁用 `.env` 的令牌。希望使用浏览器登录凭证时，应移除同名环境变量和 `.env` 中的令牌配置。
 
 ```bash
 zrlogctl --site https://blog.example.com --token-file ~/.zrlog-access-token article list
