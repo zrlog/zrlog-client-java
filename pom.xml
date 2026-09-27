@@ -116,6 +116,8 @@
                         <excludedEnvironmentVariable>ALL_PROXY</excludedEnvironmentVariable>
                         <excludedEnvironmentVariable>no_proxy</excludedEnvironmentVariable>
                         <excludedEnvironmentVariable>NO_PROXY</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>SSL_CERT_FILE</excludedEnvironmentVariable>
+                        <excludedEnvironmentVariable>SSL_CERT_DIR</excludedEnvironmentVariable>
                     </excludedEnvironmentVariables>
                 </configuration>
             </plugin>

@@ -315,7 +315,8 @@ class ProxyEnvironmentHttpTest {
         ProcessBuilder builder = new ProcessBuilder(command).directory(directory.toFile())
                 .redirectErrorStream(true).redirectOutput(output.toFile());
         builder.environment().keySet().removeIf(key -> key.toLowerCase(Locale.ROOT).endsWith("_proxy")
-                || key.startsWith("ZRLOG_") || List.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS").contains(key));
+                || key.startsWith("ZRLOG_") || List.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",
+                "SSL_CERT_FILE", "SSL_CERT_DIR").contains(key));
         builder.environment().put("XDG_CONFIG_HOME", directory.toString());
         builder.environment().putAll(environment);
         Process process = builder.start();

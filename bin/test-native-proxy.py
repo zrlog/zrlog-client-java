@@ -25,6 +25,7 @@ PROXY_AUTH = "Basic " + base64.b64encode(b"u@ser+name:p:a@ss%+word").decode()
 class Server(http.server.ThreadingHTTPServer):
     def __init__(self, address, handler):
         self.requests = []
+        self.protocols = []
         super().__init__(address, handler)
 
 
@@ -42,6 +43,8 @@ class Origin(http.server.BaseHTTPRequestHandler):
 
     def record(self):
         self.server.requests.append((self.command, self.path, self.headers))
+        self.server.protocols.append((self.request_version,
+                                      self.connection.selected_alpn_protocol() if isinstance(self.connection, ssl.SSLSocket) else None))
 
     def respond(self, code=200, value=ARTICLES):
         payload = json.dumps(value).encode() if code == 200 else b""
@@ -111,14 +114,31 @@ def main(binary):
     binary = str(Path(binary).resolve())
     with tempfile.TemporaryDirectory(prefix="zrlogctl-native-proxy-") as temporary, contextlib.ExitStack() as cleanup:
         directory = Path(temporary)
-        cert, key, trust = [directory / name for name in ("cert.pem", "key.pem", "trust.p12")]
+        ca_directory = directory / "ca-certificates"
+        ca_directory.mkdir()
+        empty_ca_directory = directory / "empty-ca-certificates"
+        empty_ca_directory.mkdir()
+        ca, ca_key = ca_directory / "runtime-ca.pem", directory / "ca.key"
+        cert, key, csr = [directory / name for name in ("cert.pem", "key.pem", "server.csr")]
         subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-                        "-keyout", str(key), "-out", str(cert), "-subj", "/CN=blog.invalid",
-                        "-addext", "subjectAltName=DNS:blog.invalid,DNS:dl.zrlog.com"], check=True, capture_output=True)
-        keytool = str(Path(os.environ["JAVA_HOME"]) / "bin/keytool") if os.environ.get("JAVA_HOME") else "keytool"
-        subprocess.run([keytool, "-importcert", "-noprompt", "-alias", "test-origin", "-file", str(cert),
-                        "-keystore", str(trust), "-storetype", "PKCS12", "-storepass", "local-test"],
-                       check=True, capture_output=True)
+                        "-keyout", str(ca_key), "-out", str(ca), "-subj", "/CN=Runtime Proxy Test CA",
+                        "-addext", "basicConstraints=critical,CA:TRUE",
+                        "-addext", "keyUsage=critical,keyCertSign,cRLSign"], check=True, capture_output=True)
+        subprocess.run(["openssl", "req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key),
+                        "-out", str(csr), "-subj", "/CN=blog.invalid"], check=True, capture_output=True)
+
+        def sign(name, hosts, days=1):
+            extensions = directory / f"{name}.ext"
+            extensions.write_text("basicConstraints=critical,CA:FALSE\nextendedKeyUsage=serverAuth\nsubjectAltName=" + hosts + "\n")
+            signed = directory / name
+            subprocess.run(["openssl", "x509", "-req", "-in", str(csr), "-CA", str(ca), "-CAkey", str(ca_key),
+                            "-CAcreateserial", "-out", str(signed), "-days", str(days), "-extfile", str(extensions)],
+                           check=True, capture_output=True)
+            return signed
+
+        sign("cert.pem", "DNS:blog.invalid,DNS:dl.zrlog.com")
+        wrong_host = sign("wrong-host.pem", "DNS:other.invalid")
+        expired = sign("expired.pem", "DNS:blog.invalid,DNS:dl.zrlog.com", days=-1)
         hosts = directory / "hosts"
         # Deliberately list IPv4 first for the mixed proxy. Only its IPv6 listener
         # can forward requests; its IPv4 listener returns a plaintext policy error.
@@ -126,7 +146,7 @@ def main(binary):
                          "::1 v6-proxy.invalid\n127.0.0.1 blog.invalid\n")
         environment = {name: value for name, value in os.environ.items()
                        if not name.lower().endswith("_proxy") and not name.startswith("ZRLOG_")
-                       and name not in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS")}
+                       and name not in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS", "SSL_CERT_FILE", "SSL_CERT_DIR")}
         environment["XDG_CONFIG_HOME"] = temporary
 
         def start(server):
@@ -140,6 +160,8 @@ def main(binary):
         origin = Server(("127.0.0.1", 0), Origin)
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.load_cert_chain(cert, key)
+        # Prefer h2 at the server: the CLI must still send HTTP/1.1.
+        tls.set_alpn_protocols(["h2", "http/1.1"])
         origin.socket = tls.wrap_socket(origin.socket, server_side=True)
         start(origin)
         ipv4_proxy = start(Server(("127.0.0.1", 0), Proxy))
@@ -148,14 +170,15 @@ def main(binary):
         ipv4_proxy.origin_port = ipv6_proxy.origin_port = origin.server_port
         site = f"https://blog.invalid:{origin.server_port}/sub"
 
-        def run(proxy_url, secure=True, expected=0, trust_cert=True, command="article", debug=False):
+        def run(proxy_url, secure=True, expected=0, trust_cert=True, command="article", debug=False, ca_bundle=False):
             properties = [f"-Djdk.net.hosts.file={hosts}"]
-            if trust_cert:
-                properties += [f"-Djavax.net.ssl.trustStore={trust}", "-Djavax.net.ssl.trustStorePassword=local-test"]
             # Set all variants so an inherited casing preference cannot affect the test.
             env = environment | {name: proxy_url for name in (
                 "https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY")}
             env.update(no_proxy="", NO_PROXY="")
+            env["SSL_CERT_DIR"] = str(ca_directory if trust_cert and not ca_bundle else empty_ca_directory)
+            if trust_cert and ca_bundle:
+                env["SSL_CERT_FILE"] = str(ca)
             if debug:
                 env["ZRLOG_PROXY_DEBUG"] = "1"
             args = ["--timeout", "5", "--site", site if secure else "http://127.0.0.1:1/sub",
@@ -184,6 +207,8 @@ def main(binary):
                     method, path, headers = origin.requests[-1]
                     assert (method, path) == ("GET", ARTICLE_PATH)
                     assert headers.get("Proxy-Authorization") is None
+                    version, alpn = origin.protocols[-1]
+                    assert version == "HTTP/1.1" and alpn != "h2", origin.protocols[-1]
                 else:
                     assert (method, path) == ("GET", "http://127.0.0.1:1" + ARTICLE_PATH)
                 assert headers.get("X-ZrLog-Admin-Token") == "test-token"
@@ -204,12 +229,24 @@ def main(binary):
             target = "dl.zrlog.com:443" if command == "update" else f"blog.invalid:{origin.server_port}"
             assert ipv6_proxy.requests[-1][0:2] == ("CONNECT", target)
             assert not blocked_ipv4.requests, "The IPv4 policy interceptor must never be contacted"
+            assert origin.protocols[-1][0] == "HTTP/1.1" and origin.protocols[-1][1] != "h2"
             print(f"PASS mixed proxy {command}: actual selector returns IPv6; debug output omits credentials")
+
+        run(proxy_url, ca_bundle=True)
+        print("PASS runtime PEM CA directory/bundle and HTTP/1.1 despite server offering h2 first")
 
         before_origin = len(origin.requests)
         run(proxy_url, expected=5, trust_cert=False)
         assert len(origin.requests) == before_origin, "TLS certificate validation must remain enabled"
         print("PASS rejects an untrusted origin certificate through the IPv6 proxy")
+
+        for invalid, reason in ((wrong_host, "wrong hostname"), (expired, "expired certificate")):
+            tls.load_cert_chain(invalid, key)
+            result = run(proxy_url, expected=5)
+            assert "SSLHandshakeException" in result.stderr or "certificate" in result.stderr.lower(), result.stderr
+            assert len(origin.requests) == before_origin, "PEM trust must not disable hostname or validity checks"
+            print(f"PASS rejects {reason} even when its issuing CA is trusted")
+        tls.load_cert_chain(cert, key)
 
         for family, address, host in ((socket.AF_INET, "127.0.0.1", "127.0.0.1"), (socket.AF_INET6, "::1", "[::1]")):
             # Reserve the port without listening so no other process can take it.
