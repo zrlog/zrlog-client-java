@@ -18,6 +18,8 @@ public final class HttpClients {
         var proxy = new EnvironmentProxySelector(System.getenv(), ProxySelector.getDefault());
         HttpClient.Builder builder = HttpClient.newBuilder()
                 .connectTimeout(timeout)
+                .version(HttpClient.Version.HTTP_1_1)
+                .sslContext(SystemTrust.create(System.getenv()))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .proxy(proxy);
         Authenticator authenticator = proxy.authenticator();
