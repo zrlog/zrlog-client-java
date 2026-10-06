@@ -5,8 +5,8 @@
       "id": "admin-web",
       "file": "admin-web.yaml",
       "title": "ZrLog Admin Web API",
-      "version": "3.5.9-SNAPSHOT",
-      "sha256": "a3ae41cfa4c29a3febe14cde876fc31a5fc54f5e77f34d42a45ce72e69f8ca81",
+      "version": "4.0.0",
+      "sha256": "96a3b38fb7d9923a6a4be24a1fb62a7e229e4a32568f2c18d73f86354de4ce3b",
       "operations": [
         {
           "operationId": "listArticles",
@@ -74,8 +74,8 @@
       "id": "blog-web",
       "file": "blog-web.yaml",
       "title": "ZrLog Blog Public API",
-      "version": "3.5.8-SNAPSHOT",
-      "sha256": "41b746f61154f2d4e4d85176be9e555a84f66002e03ede4d269a69022860cfe9",
+      "version": "4.0.0",
+      "sha256": "1ad7ada0b314c9d3fc6e87daf67846506b8c7827f72b76feb3e799f8affd4444",
       "operations": [
         {
           "operationId": "listPublicArticles",

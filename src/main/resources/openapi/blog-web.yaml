@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: ZrLog Blog Public API
-  version: 3.5.8-SNAPSHOT
+  version: 4.0.0
   description: |-
     ZrLog 博客前台公开只读 API。路径不包含部署 context path，调用方应使用目标博客实例的基础地址。
     插件提供的 `/api/plugin/*` 和 `/api/p/*` 不属于本契约。

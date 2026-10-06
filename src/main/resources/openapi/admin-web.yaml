@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: ZrLog Admin Web API
-  version: 3.5.9-SNAPSHOT
+  version: 4.0.0
   description: |-
     ZrLog 后台管理受支持接口文档。这里只记录稳定、明确支持的关键接口，不是后台全部路由清单；
     未记录路由属于 admin UI 内部实现，不承诺第三方调用兼容性。
