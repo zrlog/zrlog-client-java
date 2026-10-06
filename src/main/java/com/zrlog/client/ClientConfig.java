@@ -13,14 +13,7 @@ public record ClientConfig(URI baseUri, String token, Duration timeout, boolean 
     private static final Set<String> LOCAL_HOSTS = Set.of("localhost", "127.0.0.1", "[::1]", "::1");
 
     public ClientConfig {
-        if (baseUri == null || baseUri.getHost() == null || baseUri.getUserInfo() != null
-                || baseUri.getQuery() != null || baseUri.getFragment() != null) {
-            throw new IllegalArgumentException("ZrLog site must be an absolute HTTP(S) URL without credentials, query, or fragment");
-        }
-        if (!"https".equals(baseUri.getScheme())
-                && !("http".equals(baseUri.getScheme()) && LOCAL_HOSTS.contains(baseUri.getHost()))) {
-            throw new IllegalArgumentException("ZrLog site must use HTTPS except for localhost");
-        }
+        baseUri = normalizeBaseUri(baseUri);
         if (token == null || token.isBlank()) {
             throw new IllegalArgumentException("ZrLog access token is required");
         }
@@ -31,10 +24,22 @@ public record ClientConfig(URI baseUri, String token, Duration timeout, boolean 
         if (timeout.isZero() || timeout.isNegative()) {
             throw new IllegalArgumentException("ZrLog HTTP timeout must be greater than zero");
         }
+    }
+
+    public static URI normalizeBaseUri(URI baseUri) {
+        if (baseUri == null || baseUri.getHost() == null || baseUri.getUserInfo() != null
+                || baseUri.getQuery() != null || baseUri.getFragment() != null) {
+            throw new IllegalArgumentException("ZrLog site must be an absolute HTTP(S) URL without credentials, query, or fragment");
+        }
+        if (!"https".equals(baseUri.getScheme())
+                && !("http".equals(baseUri.getScheme()) && LOCAL_HOSTS.contains(baseUri.getHost()))) {
+            throw new IllegalArgumentException("ZrLog site must use HTTPS except for localhost");
+        }
         String path = baseUri.getPath();
         if (path != null && path.endsWith("/")) {
             baseUri = URI.create(baseUri.toString().substring(0, baseUri.toString().length() - 1));
         }
+        return baseUri;
     }
 
     public URI resolve(String apiPath) {

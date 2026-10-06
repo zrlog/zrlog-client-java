@@ -1,0 +1,352 @@
+openapi: 3.1.0
+info:
+  title: ZrLog Blog Public API
+  version: 3.5.8-SNAPSHOT
+  description: |-
+    ZrLog 博客前台公开只读 API。路径不包含部署 context path，调用方应使用目标博客实例的基础地址。
+    插件提供的 `/api/plugin/*` 和 `/api/p/*` 不属于本契约。
+x-zrlog-id: blog-web
+x-zrlog-display-name: 博客公开 API
+x-zrlog-owner-repository: https://github.com/zrlog/zrlog-blog-web-parent
+x-zrlog-source-path: docs/api/openapi.yaml
+x-zrlog-audience: public
+externalDocs:
+  description: ZrLog API 文档网页
+  url: https://www.zrlog.com/docs/api?source=blog-web
+servers:
+  - url: "{baseUrl}"
+    description: 目标 ZrLog 博客地址，包含可选的 context path
+    variables:
+      baseUrl:
+        default: http://localhost:8080
+tags:
+  - name: Article
+    description: 公开文章和评论查询
+  - name: Bootstrap
+    description: 博客前台初始化数据
+paths:
+  /api/article:
+    get:
+      tags: [Article]
+      summary: 查询公开文章列表
+      description: 返回已发布文章的分页列表。默认按置顶优先排序；`feed=true` 时按发布时间倒序。
+      operationId: listPublicArticles
+      x-zrlog-controller: com.zrlog.blog.web.controller.api.BlogApiArticleController#index
+      x-zrlog-response-kind: action
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - name: key
+          in: query
+          required: false
+          description: 标题、正文或元数据搜索关键词
+          schema:
+            type: string
+            default: ""
+        - name: feed
+          in: query
+          required: false
+          description: 为 true 时忽略置顶顺序并按最新文章优先
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: 文章分页数据或业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticlePageResponse"
+  /api/article/detail:
+    get:
+      tags: [Article]
+      summary: 查询公开文章详情
+      operationId: getPublicArticle
+      x-zrlog-controller: com.zrlog.blog.web.controller.api.BlogApiArticleController#detail
+      x-zrlog-response-kind: action
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: 文章数字 ID 或别名
+          schema:
+            type: string
+          example: hello-world
+      responses:
+        "200":
+          description: 文章详情；文章不存在时 data 可能为 null
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleDetailResponse"
+  /api/article/comment:
+    get:
+      tags: [Article]
+      summary: 查询文章公开评论
+      operationId: listPublicArticleComments
+      x-zrlog-controller: com.zrlog.blog.web.controller.api.BlogApiArticleController#comment
+      x-zrlog-response-kind: action
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: 文章数字 ID
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        "200":
+          description: 公开评论列表或业务错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommentListResponse"
+  /api/cache:
+    get:
+      tags: [Bootstrap]
+      summary: 查询博客初始化缓存
+      description: 返回分类、标签、导航、站点信息和统计等前台公共初始化数据。
+      operationId: getBlogBootstrapData
+      x-zrlog-controller: com.zrlog.blog.web.controller.api.BlogApiCacheController#index
+      x-zrlog-response-kind: action
+      responses:
+        "200":
+          description: 博客初始化数据
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BootstrapResponse"
+  /api/public/blogResource:
+    get:
+      tags: [Bootstrap]
+      summary: 查询博客前端资源配置
+      description: 返回当前语言资源、站点标题、首页地址、主题模式和构建标识。语言字段会随站点语言包扩展。
+      operationId: getBlogResource
+      x-zrlog-controller: com.zrlog.blog.web.controller.api.BlogApiPublicController#blogResource
+      x-zrlog-response-kind: action
+      responses:
+        "200":
+          description: 博客前端资源配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BlogResourceResponse"
+components:
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 从 1 开始的页码；非正数回退为 1
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      description: 每页数量；非正数回退为 10
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+        default: 10
+  schemas:
+    StandardResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: integer
+          description: 0 表示成功，非零表示业务失败
+        message:
+          type: string
+          description: 按当前请求语言返回的提示；成功时可为空。资源不存在或服务异常使用本地化说明，不返回原始异常文本；调用方应依据 error 判断结果。
+    ArticlePageResponse:
+      allOf:
+        - $ref: "#/components/schemas/StandardResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/ArticlePage"
+    ArticleDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/StandardResponse"
+        - type: object
+          properties:
+            data:
+              oneOf:
+                - $ref: "#/components/schemas/ArticleDetail"
+                - type: "null"
+    CommentListResponse:
+      allOf:
+        - $ref: "#/components/schemas/StandardResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/VisitorComment"
+    BootstrapResponse:
+      allOf:
+        - $ref: "#/components/schemas/StandardResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/BootstrapData"
+    BlogResourceResponse:
+      allOf:
+        - $ref: "#/components/schemas/StandardResponse"
+        - type: object
+          required: [data]
+          properties:
+            data:
+              $ref: "#/components/schemas/BlogResourceData"
+    ArticlePage:
+      type: object
+      required: [page, size, totalElements, rows]
+      properties:
+        page:
+          type: integer
+          format: int64
+        size:
+          type: integer
+          format: int64
+        totalElements:
+          type: integer
+          format: int64
+        key:
+          type: string
+        sort:
+          type: array
+          items:
+            type: string
+        defaultPageSize:
+          type: integer
+          format: int64
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArticleBasic"
+    ArticleBasic:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        logId: { type: integer, format: int64 }
+        alias: { type: string }
+        title: { type: string }
+        digest: { type: string }
+        content: { type: string, description: 渲染后的 HTML 正文 }
+        markdown: { type: string }
+        canComment: { type: boolean }
+        click: { type: integer, format: int64 }
+        commentSize: { type: integer, format: int64 }
+        recommended: { type: boolean }
+        sticky: { type: integer }
+        releaseTime: { type: string, description: yyyy-MM-dd }
+        fullReleaseTime: { type: string, description: yyyy-MM-dd HH:mm:ss }
+        lastUpdateDate: { type: string, description: yyyy-MM-dd }
+        fullLastUpdateDate: { type: string, description: yyyy-MM-dd HH:mm:ss }
+        typeId: { type: integer, format: int64 }
+        typeAlias: { type: string }
+        typeName: { type: string }
+        typeUrl: { type: string, format: uri-reference }
+        userId: { type: integer, format: int64 }
+        userName: { type: string }
+        header: { type: string, format: uri-reference }
+        url: { type: string, format: uri-reference }
+        noSchemeUrl: { type: string }
+        commentUrl: { type: string, format: uri-reference }
+        thumbnail: { type: [string, "null"], format: uri-reference }
+        thumbnailAlt: { type: [string, "null"] }
+        tags:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tag"
+        extensions:
+          type: object
+          additionalProperties: true
+    ArticleDetail:
+      allOf:
+        - $ref: "#/components/schemas/ArticleBasic"
+        - type: object
+          properties:
+            comments:
+              type: array
+              items:
+                $ref: "#/components/schemas/VisitorComment"
+            lastLog:
+              $ref: "#/components/schemas/AdjacentArticle"
+            nextLog:
+              $ref: "#/components/schemas/AdjacentArticle"
+            tocHtml: { type: string }
+            toc:
+              type: array
+              items:
+                $ref: "#/components/schemas/Outline"
+            contentProtectorHtml: { type: string }
+    AdjacentArticle:
+      type: object
+      properties:
+        title: { type: string }
+        alias: { type: string }
+        url: { type: string, format: uri-reference }
+    Tag:
+      type: object
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri-reference }
+    Outline:
+      type: object
+      properties:
+        text: { type: string }
+        level: { type: integer }
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/Outline"
+    VisitorComment:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        userComment: { type: string }
+        header: { type: string, format: uri-reference }
+        commTime: { type: string }
+        userHome: { type: string, format: uri-reference }
+        userName: { type: string }
+        gravatarId: { type: string }
+    BootstrapData:
+      type: object
+      description: 博客公共缓存快照；集合元素结构随核心 DTO 演进，调用方应忽略未知字段。
+      properties:
+        version: { type: integer, format: int64 }
+        webSiteVersion: { type: integer, format: int64 }
+        tags: { type: array, items: { type: object, additionalProperties: true } }
+        types: { type: array, items: { type: object, additionalProperties: true } }
+        links: { type: array, items: { type: object, additionalProperties: true } }
+        plugins: { type: array, items: { type: object, additionalProperties: true } }
+        archives: { type: object, additionalProperties: { type: integer, format: int64 } }
+        archiveList: { type: array, items: { type: object, additionalProperties: true } }
+        webSite: { type: object, additionalProperties: true }
+        hotLogs: { type: array, items: { type: object, additionalProperties: true } }
+        logNavs: { type: array, items: { type: object, additionalProperties: true } }
+        typeHotLogs: { type: array, items: { type: object, additionalProperties: true } }
+        statistics: { type: object, additionalProperties: true }
+        users: { type: array, items: { type: object, additionalProperties: true } }
+        templateConfigCacheMap: { type: object, additionalProperties: true }
+    BlogResourceData:
+      type: object
+      description: 已知站点字段与当前语言包字段的组合。
+      properties:
+        websiteTitle: { type: string }
+        homeUrl: { type: string, format: uri-reference }
+        articleRoute: { type: string }
+        admin_darkMode: { type: boolean }
+        buildId: { type: string }
+      additionalProperties: true

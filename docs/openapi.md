@@ -1,0 +1,112 @@
+# OpenAPI 运行时调用
+
+`zrlogctl api` 直接加载 OpenAPI 3.1 YAML/JSON，在运行时发现接口、校验输入并构造 HTTP 请求。新增接口使用已支持的协议能力时，只需更换契约文件，无须生成 SDK、增加 Java API 方法或重新编译 CLI。
+
+## 命令
+
+```bash
+# 离线查看内置后台契约
+zrlogctl api list
+zrlogctl api describe createArticle
+
+# 加载正在开发的契约；--spec 优先于 --source
+zrlogctl api --spec ../zrlog-admin-web/docs/api/openapi.yaml list
+zrlogctl api --spec /path/to/openapi.yaml describe operationId
+
+# 校验请求，不读取凭证、不发起请求；@文件按 UTF-8 读取
+zrlogctl api call createArticle --body @article.json --dry-run
+
+# 使用已有 login、--token-file 或环境变量中的凭证
+zrlogctl api call listArticles --query page=1 --query size=100 --query sort=id,desc --query status=
+zrlogctl api call getArticle --query id=42
+zrlogctl api call listCategories
+zrlogctl api call createCategory --body '{"typeName":"指南","alias":"guides","remark":"使用指南"}'
+zrlogctl api call updateCategory --body '{"id":1,"typeName":"新指南","alias":"guides","remark":""}'
+zrlogctl api call createExternalNotification --body '{"title":"构建完成"}'
+zrlogctl api call uploadAttachment --query dir=guides/example --file imgFile=cover.png
+zrlogctl api call uploadTemplate --query shortTemplate=my-theme --query overwrite=false --file file=my-theme.zip
+
+# 公开接口无需登录，不附加已有凭证
+zrlogctl --site https://blog.example.com api --source blog-web call getPublicArticle --query id=hello-world
+
+# 启用服务端文章发布流，进度写入 stderr，最终流结果写入 stdout
+zrlogctl api call createArticle --body @publish.json --accept text/event-stream --timeout 300
+```
+
+`api call` 的参数为 `operationId`。`--path`、`--query`、`--header`、`--cookie` 只接受契约声明的参数；使用重复选项提供不同参数，例如 `--query page=1 --query size=20`。同名参数出现两次会报错。数组和对象用 JSON 值，例如 `--query 'tags=["java","cli"]'`、`--query 'filter={"title":"hello"}'`。字符串保持原样，数字和布尔值按 Schema 校验，不推测 `yes/no` 等别名。Schema 的 `default` 是注解，不自动填入请求。
+
+JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用 `--form name=value`，二进制字段使用 `--file field=路径`。多个请求类型可通过 `--content-type` 选择；响应默认优先 `application/json`，可用 `--accept` 选择契约中的其他类型。普通二进制响应使用 `--save-response 新文件` 保存，已有文件不会覆盖；SSE 保存的是最终流摘要。`--output json` 沿用现有 CLI 输出模式，普通调用输出服务端完整 JSON，不自动提取 `data`。
+
+## 已覆盖的 CLI 业务接口
+
+内置后台契约已覆盖 `ZrLogApi` 使用的全部 10 个业务操作。OAuth 登录与刷新仍使用现有授权协议，不通过业务 OpenAPI 调用。
+
+| operationId | HTTP 请求 |
+| --- | --- |
+| listArticles | GET /api/admin/article |
+| getArticle | GET /api/admin/article-edit |
+| createArticle | POST /api/admin/article/create |
+| updateArticle | POST /api/admin/article/update |
+| listCategories | GET /api/admin/article-type |
+| createCategory | POST /api/admin/type/add |
+| updateCategory | POST /api/admin/type/update |
+| uploadAttachment | POST /api/admin/upload |
+| uploadTemplate | POST /api/admin/template/upload |
+| createExternalNotification | POST /api/webhook/message-center/notice |
+
+`api call listArticles` 每次只取一页。省略状态、每页条数或排序时，服务端使用账号的后台偏好；上面的示例显式传空 `status` 来查询全部可见状态。需要全部文章时，按返回的 `data.totalElements` 逐页读取并校验重复和数量变化。`getArticle` 返回 `data.article` 的完整快照；更新前提取可写字段以及 `logId`、`version`，不要回传只读字段或 UI 元数据。
+
+已有 `article list` 等便捷命令仍使用原有业务实现；补齐契约让通用 `api call` 可以调用同一批接口，不会自动把便捷命令迁移到 OpenAPI 调用器。
+
+分类写入默认使用 JSON 并检查 `error`。如果选择 SSE，`response` 事件携带写入结果，`refresh-complete` 确认缓存刷新完成；通用调用器只按契约识别流完成/失败事件，事件 data 保留为字符串，调用方还需检查其中的业务 `error`。断流或刷新失败时写入可能已经完成，不能自动重试。
+
+## 实现与边界
+
+- YAML 语法读取复用 SnakeYAML Engine；JSON Schema 2020-12 校验复用 networknt，支持组合 Schema、可空类型、必填字段和 `unevaluatedProperties`。不根据描述文本猜测参数或业务规则。JSON Schema `format` 按注解处理，不作完整格式断言。
+- OpenAPI 层负责解析操作目录、合并路径级与操作级参数、按定义序列化请求。支持 OpenAPI 3.1.x；当前不接受 2.0/3.0，也不承诺实现整个 3.1 标准。
+- 支持文档内部 JSON Pointer `$ref`。契约来自本地文件或内置资源，不自动下载远程契约或外部引用。引用文件应先打包为一个文档；暂不支持 `$id`、锚点和动态引用。YAML 循环别名拒绝，模型递归使用 Schema `$ref`。
+- 路径支持 `simple`、`label`、`matrix`；查询支持 `form`、扁平对象的 `deepObject`、数组的 `spaceDelimited/pipeDelimited`；Header 支持 `simple`，Cookie 支持标量 `form`。支持相应的 `explode` 组合。参数的嵌套对象、`content` 参数定义、`allowReserved=true` 明确拒绝。
+- 请求体支持 JSON、`+json`、文本、URL 编码表单、multipart 标量/JSON 对象字段与单文件字段。multipart 可指定字段 `encoding.contentType`；自定义 part headers、style/explode、数组字段（含多文件数组）暂不支持。表单字段须在 Schema properties（可经 allOf）中声明。
+- Schema 只校验请求，响应校验 HTTP 状态和媒体类型；当前不强制校验响应 JSON Schema。保留 ZrLog 公共响应中的数字 `error` 处理和现有退出码。
+- 服务地址始终来自 `--site`、环境、项目配置或上次登录，包含 context path。契约的 `servers` 用于描述，不覆盖已选择的站点。操作不会自动切换服务器或跟随重定向。
+- 无 `security` 或存在匿名备选 `{}` 的操作不读取、不发送保存的凭证。受保护操作支持单个 Bearer/OAuth 或 Header API Key；按已有凭证类型选择安全方案。OAuth 登录、刷新继续由原有登录链路负责，不从契约启用另一套登录流程。Cookie/API Key query、Basic、多凭证 AND 组合暂不支持。scope 最终由服务器检查。
+- HTTP 传输复用现有代理、TLS 与超时配置。一次命令只发送一次业务请求，不自动重试写入，也不重连 SSE。`--dry-run` 校验参数、请求体并展示计划，不验证服务器权限或执行结果。
+
+遇到不支持的请求序列化或 Schema 特性会报出具体位置，不静默降级。路径、参数和请求体来自 YAML；文章版本、权限与其他业务行为仍由服务端执行。已有 `article publish` 等便捷命令仍负责它们原有的本地文件与验证流程，本轮没有把未收录的后台内部接口自动公开。
+
+## SSE 完成语义
+
+OpenAPI 的 `text/event-stream` 不能表达哪个事件表示一次业务操作完成。需要完成保证的接口在响应媒体类型上声明扩展：
+
+```yaml
+responses:
+  '200':
+    description: 流式结果
+    content:
+      text/event-stream:
+        x-zrlog-stream:
+          completionEvent: publish-complete
+          errorEvents: [publish-error, static-error, sse-error]
+        schema:
+          type: string
+```
+
+客户端不内置这些业务事件名。每个收到的事件以 `{event,id,data}` JSON 行输出到 stderr，`data` 保留 SSE 原始字符串，支持多行 data、注释、CRLF 和 BOM。收到指定完成事件后结束；收到指定失败事件或完成前断流返回失败，避免把“文章已保存”误判为“发布完成”。`--timeout` 覆盖完整响应和流的持续时间。失败不会重放请求。
+
+没有此扩展的通用流在正常 EOF 后返回事件数量，`completionEvent` 为 null，仅表示流已结束。它不推断业务成功。流结果与响应中的描述文本不互相替代。
+
+## 契约来源与维护
+
+`src/main/resources/openapi/admin-web.yaml` 与 `blog-web.yaml` 是离线发布快照。权威来源分别为 `zrlog-admin-web/docs/api/openapi.yaml` 与 `zrlog-blog-web-parent/docs/api/openapi.yaml`，不在客户端副本中独立修改接口。
+
+在包含这些仓库的工作区中同步：
+
+```bash
+python3 bin/sync-openapi.py
+python3 bin/sync-openapi.py --check
+./mvnw verify
+```
+
+单独检出客户端时可使用已提交的快照完成构建；`--spec` 直接读取指定版本，避免必须等待 CLI 发布。构建不抓取最新远程契约，也不对 YAML 进行 Maven 属性替换。契约本身的接口版本兼容仍由服务端维护。
+
+验证覆盖离线发现、新 YAML 接口调用、参数编码与作用域覆盖、Schema 组合、真实 multipart、认证选择、公开接口不发送凭证、业务错误、SSE 完成/失败/断流/超时，以及不重试行为。原生构建需额外验证资源包含和运行时 Schema 校验。

@@ -1,0 +1,1115 @@
+openapi: 3.1.0
+info:
+  title: ZrLog Admin Web API
+  version: 3.5.9-SNAPSHOT
+  description: |-
+    ZrLog 后台管理受支持接口文档。这里只记录稳定、明确支持的关键接口，不是后台全部路由清单；
+    未记录路由属于 admin UI 内部实现，不承诺第三方调用兼容性。
+    路径不包含部署 context path；跨接口约定见 docs/api/conventions.md。
+x-zrlog-id: admin-web
+x-zrlog-display-name: 后台管理 API
+x-zrlog-owner-repository: https://github.com/zrlog/zrlog-admin-web
+x-zrlog-source-path: docs/api/openapi.yaml
+x-zrlog-audience: authenticated-admin
+externalDocs:
+  description: ZrLog API 文档网页
+  url: https://www.zrlog.com/docs/api?source=admin-web
+servers:
+  - url: "{baseUrl}"
+    description: ZrLog 后台服务基础地址，包含可选的 context path
+    variables:
+      baseUrl:
+        default: http://localhost:17080/sub
+tags:
+  - name: Article
+    description: 文章查询、创建与全量更新
+  - name: Category
+    description: 文章分类查询与维护
+  - name: Upload
+    description: 通用附件上传
+  - name: Template
+    description: 主题安装与管理
+  - name: Notification
+    description: 外部消息中心通知
+paths:
+  /api/admin/article:
+    get:
+      tags: [Article]
+      summary: 分页查询后台文章
+      description: |-
+        需要 `article.read`。只返回当前账号有权读取的文章：author/contributor 仅能查询自己的文章，
+        editor 不可读取他人的私密文章。这里包含草稿和私密文章，与博客公开文章列表不同。
+
+        `status`、`size`、`sort` 省略时分别使用当前账号的文章列表状态、每页条数和排序偏好。
+        自动化遍历应显式传 `status=`、`page=1`、`size=100`、`sort=id,desc`，
+        然后按相同条件逐页读取，直到达到 `data.totalElements`。空 status 表示全部可见状态。
+        分页期间没有一致性快照；文章增删可能改变总数或造成重复/遗漏，调用方应校验分页结果。
+
+        `data.rows` 只提供列表字段，不包含用于更新的完整正文快照与 version；更新前必须调用 getArticle。
+        响应中的 columns、types、statusCounts 等页面辅助字段不属于此操作的稳定数据契约。
+      operationId: listArticles
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.AdminArticleController#index
+      x-zrlog-response-kind: page-hydration
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      parameters:
+        - name: page
+          in: query
+          description: 页码，从 1 开始
+          schema: {type: integer, format: int32, minimum: 1, default: 1}
+        - name: size
+          in: query
+          description: 每页条数；省略时使用账号偏好，自动化调用应显式设置
+          schema: {type: integer, format: int32, minimum: 1}
+          example: 100
+        - name: sort
+          in: query
+          description: 单个排序字段与可选方向；方向不区分大小写，省略方向时为 DESC，省略整个参数时使用账号偏好
+          schema:
+            type: string
+            pattern: '^(id|typeName|releaseTime|commentSize|privacy|click|lastUpdateDate)(,([aA][sS][cC]|[dD][eE][sS][cC]))?$'
+          example: id,desc
+        - name: status
+          in: query
+          description: |-
+            空字符串查询全部可见状态；published 为非草稿且非私密，draft 为 rubbish=true，
+            private 为 privacy=true（包括私密草稿）。省略时使用账号偏好。
+          schema: {type: string, enum: ["", published, draft, private]}
+          example: ""
+        - name: key
+          in: query
+          description: 在标题、纯文本正文、关键词和别名中执行包含查询；空字符串不筛选，保留 SQL LIKE 的 % 和 _ 通配语义
+          schema: {type: string}
+        - name: types
+          in: query
+          description: 单个分类 alias，精确匹配；不是分类 ID 或数组，空字符串不筛选
+          schema: {type: string}
+      responses:
+        "200":
+          description: 分页结果位于 data；业务失败仍可能使用 HTTP 200，必须检查 error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleListResponse"
+              example:
+                error: 0
+                message: ""
+                data:
+                  page: 1
+                  size: 100
+                  totalElements: 1
+                  rows:
+                    - {id: 42, title: Hello ZrLog, alias: hello-zrlog, typeAlias: guides, rubbish: true, privacy: false}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/article-edit:
+    get:
+      tags: [Article]
+      summary: 读取完整文章快照
+      description: |-
+        需要 `article.read`，并检查文章归属与私密状态。通过正整数 id 读取 `data.article`，
+        包括下一次全量更新所需的 logId、version 和可写字段。不存在或无权读取时返回业务错误，不能当作空文章。
+        本契约只支持读取已有文章；省略 id 的后台新建编辑器初始化行为不属于此契约。
+
+        响应还包含编辑器、分类、标签、AI 上下文和页面元数据，调用方不应依赖这些 UI 字段。
+        提交 updateArticle 前只提取可写字段与 logId、version，不要直接回传整个响应，
+        previewUrl、lastUpdateDate、socialPreview 等只读字段不属于更新请求。
+      operationId: getArticle
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.AdminArticleController#articleEdit
+      x-zrlog-response-kind: page-hydration
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: 已存在的文章 ID
+          schema: {type: integer, format: int32, minimum: 1}
+          example: 42
+      responses:
+        "200":
+          description: 完整文章位于 data.article；必须检查 error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleSaveResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/article-type:
+    get:
+      tags: [Category]
+      summary: 查询全部文章分类
+      description: |-
+        需要 `taxonomy.read`。分类位于 `data.rows`，一次返回全部分类，无分页或筛选参数。
+        分类主键字段是 id，可作为文章写入请求的 typeId。amount/typeamount 是分类下全部文章数量，包含草稿和私密文章。
+        页面元数据不属于稳定数据契约。
+      operationId: listCategories
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.TypeController#index
+      x-zrlog-response-kind: page-hydration
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      responses:
+        "200":
+          description: 全部分类位于 data.rows；必须检查 error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoryListResponse"
+              example:
+                error: 0
+                message: ""
+                data:
+                  rows:
+                    - {id: 1, typeName: 指南, alias: guides, remark: 使用指南, amount: 3, typeamount: 3}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/type/add:
+    post:
+      tags: [Category]
+      summary: 创建文章分类
+      description: |-
+        需要 `taxonomy.manage`。创建后仅返回 error/message，不返回新分类 ID；需要 ID 时重新调用 listCategories。
+        本操作不幂等，不能依赖 alias 唯一性去重；响应丢失时应先读取分类核对，不得自动重放写入。
+        默认返回 JSON，表示分类写入结果；`Accept: text/event-stream` 可等待缓存与静态页面刷新。
+        SSE 的 response 表示业务方法已返回（仍需检查其中 error），refresh-complete 表示刷新完成；
+        静态刷新失败或断流时分类可能已写入，不能据此重试创建。
+      operationId: createCategory
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.TypeController#add
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 创建分类数据库记录
+        - 刷新博客缓存并触发博客静态页面更新；普通 JSON 模式通常异步执行
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryCreateRequest"
+            example: {typeName: 指南, alias: guides, remark: 使用指南}
+      responses:
+        "200":
+          $ref: "#/components/responses/CategoryWriteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/type/update:
+    post:
+      tags: [Category]
+      summary: 全量更新文章分类
+      description: |-
+        需要 `taxonomy.manage`。按 id 更新 typeName、alias 和 remark；remark 省略或为 null 时清空。
+        没有 version 并发检查，后一次成功写入覆盖前一次。仅返回 error/message，不返回分类对象。
+        默认返回 JSON；`Accept: text/event-stream` 的 response 表示业务方法已返回，
+        refresh-complete 表示缓存与静态页面刷新完成。业务失败仍需检查 error。
+        刷新失败或断流时分类可能已写入，应先重新读取判断实际结果，不得自动重放。
+      operationId: updateCategory
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.TypeController#update
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 覆盖指定分类的名称、别名和说明
+        - 刷新博客缓存并触发博客静态页面更新；普通 JSON 模式通常异步执行
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryUpdateRequest"
+            example: {id: 1, typeName: 新指南, alias: guides, remark: 更新后的使用指南}
+      responses:
+        "200":
+          $ref: "#/components/responses/CategoryWriteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/article/create:
+    post:
+      tags:
+        - Article
+      summary: 创建文章
+      description: |-
+        需要 `article.create`，公开发布另需 `article.publish`。投稿者仅能创建草稿。
+        创建草稿、私密文章或公开文章。`editorType=markdown`、`markdown` 非空且 `content` 为空或省略时，
+        Java 17 及以上的服务端使用内置 marked 渲染 HTML；Java 11 跳过渲染并记录警告，仍继续保存。
+        调用方显式提供的 `content` 保持不变；Java 11 调用方应自行提供 HTML，否则正文可能为空。
+
+        `rubbish=true` 表示草稿并保持非公开；`rubbish=false, privacy=true` 表示私密文章；
+        `rubbish=false, privacy=false` 表示公开发布。调用方必须显式传递这两个状态，避免意外发布。
+        `transparentPublish=false` 返回普通 JSON；公开发布时设为 true 可接收 SSE。
+        JSON 成功响应确认文章已保存；涉及公开内容时，博客数据缓存立即刷新，插件与静态页面在后台同步，不阻塞保存响应。
+        SSE 的 `article` 表示已保存，必须等待 `publish-complete` 才能确认发布完成，详见 docs/api/article-publish-sse.md。
+
+        本操作不幂等。请求成功但响应丢失时，不应直接重试，否则可能创建重复文章。
+      operationId: createArticle
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.AdminArticleController#create
+      x-zrlog-response-kind: page-hydration
+      x-zrlog-side-effects:
+        - 创建文章数据库记录并记录 CREATE_ARTICLE 管理审计
+        - 公开文章创建成功后刷新博客缓存，并可能触发静态站同步
+        - preserveDraftAiMessages 为 false 时可能把后台编辑器的未归属临时上下文迁移到新文章
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      requestBody:
+        required: true
+        description: 独立自动化调用建议设置 `preserveDraftAiMessages=true`，避免改变后台编辑器中的临时状态。
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArticleCreateRequest"
+            example:
+              title: Hello ZrLog
+              typeId: 1
+              alias: hello-zrlog
+              content: <p>Hello ZrLog</p>
+              markdown: "# Hello ZrLog"
+              thumbnail: ""
+              keywords: zrlog,java
+              digest: Hello ZrLog
+              canComment: true
+              privacy: false
+              recommended: false
+              rubbish: false
+              editorType: markdown
+              transparentPublish: false
+              preserveDraftAiMessages: true
+      responses:
+        "200":
+          description: |-
+            请求已处理。成功时核心结果位于 `data.article`；失败仍可能使用 HTTP 200，调用方必须检查 `error`。
+          content:
+            text/event-stream:
+              x-zrlog-stream:
+                completionEvent: publish-complete
+                errorEvents: [publish-error, static-error, sse-error]
+              schema:
+                $ref: "#/components/schemas/ArticlePublishStream"
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleSaveResponse"
+              examples:
+                created:
+                  summary: 文章创建成功
+                  value:
+                    error: 0
+                    message: 已发布
+                    data:
+                      article:
+                        logId: 42
+                        version: 0
+                        title: Hello ZrLog
+                        typeId: 1
+                        alias: hello-zrlog
+                        content: <p>Hello ZrLog</p>
+                        markdown: "# Hello ZrLog"
+                        thumbnail: ""
+                        keywords: zrlog,java
+                        digest: Hello ZrLog
+                        editorType: markdown
+                        canComment: true
+                        recommended: false
+                        rubbish: false
+                        privacy: false
+                missingTitle:
+                  summary: 缺少文章标题
+                  value:
+                    error: 9026
+                    message: 文章标题不能为空
+                unauthenticated:
+                  summary: 管理员凭证无效
+                  value:
+                    error: 9001
+                    message: 会话超时，请重新登录
+  /api/admin/article/update:
+    post:
+      tags:
+        - Article
+      summary: 全量更新文章
+      description: |-
+        需要 `article.update`，并检查文章归属与私密状态；修改或撤回线上文章另需 `article.publish`。
+        author 仅能修改自己的文章，contributor 仅能修改自己的草稿，editor 无权读取或修改他人的私密文章。
+        更新不会更改原作者 userId。
+        使用完整可写快照更新文章，不是 PATCH。`logId` 和 `version` 必须来自最近一次文章读取或保存响应；
+        成功后返回的 `data.article.version` 是下一次更新必须使用的新版本。提交版本与服务器版本不一致（包括超前版本）时返回业务错误 `9094`。
+        版本检查与文章更新在同一条数据库语句中完成；同一版本的并发保存最多一份成功，失败请求不写入版本历史。
+
+        通过 getArticle（GET /api/admin/article-edit?id=...）读取当前完整快照；列表行不包含完整正文与 version，不能直接用于更新。
+
+        调用方应先取得完整文章快照，只修改目标字段后再提交。省略可写字符串字段可能导致清空、重算或把别名重置为数字 ID；
+        省略布尔字段会按 false 处理。`editorType=markdown`、`markdown` 非空且 `content` 为空或省略时，
+        Java 17 及以上的服务端使用内置 marked 重新生成 HTML；Java 11 跳过渲染并记录警告，仍继续保存。
+        调用方显式提供的 `content` 保持不变；Java 11 调用方应自行提供 HTML，否则正文可能被清空。状态组合与创建接口相同。
+        `transparentPublish=false` 返回普通 JSON；公开发布或修订时设为 true 可接收 SSE。
+        JSON 成功响应确认文章已保存；撤回公开文章为草稿时同样先刷新博客数据缓存，再在后台同步插件与静态页面，不等待整站生成完成。
+        必须等待 `publish-complete` 才能确认发布完成；中途失败时文章可能已保存，不能自动重放请求。
+        事件说明见 docs/api/article-publish-sse.md。
+
+        本操作不能在响应丢失后使用旧 `version` 无条件重试；应重新读取最新快照并判断实际保存结果。
+      operationId: updateArticle
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.AdminArticleController#update
+      x-zrlog-response-kind: page-hydration
+      x-zrlog-side-effects:
+        - 全量覆盖文章可写字段并记录文章版本差异
+        - 更新非草稿文章时记录 UPDATE_ARTICLE 管理审计
+        - 涉及当前或原公开文章时刷新博客缓存，并可能触发静态站同步
+        - 公开文章转为草稿或私密文章时会清除置顶状态并重排置顶文章
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      requestBody:
+        required: true
+        description: 必须提交当前完整可写快照，并携带最近一次响应中的 `version`。
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArticleUpdateRequest"
+            example:
+              logId: 42
+              version: 0
+              title: Hello ZrLog, updated
+              typeId: 1
+              alias: hello-zrlog
+              content: <p>Updated content</p>
+              markdown: "# Updated content"
+              thumbnail: ""
+              keywords: zrlog,java
+              digest: Updated digest
+              canComment: true
+              privacy: false
+              recommended: false
+              rubbish: false
+              editorType: markdown
+              transparentPublish: false
+      responses:
+        "200":
+          description: |-
+            请求已处理。成功时核心结果位于 `data.article`；失败仍可能使用 HTTP 200，调用方必须检查 `error`。
+          content:
+            text/event-stream:
+              x-zrlog-stream:
+                completionEvent: publish-complete
+                errorEvents: [publish-error, static-error, sse-error]
+              schema:
+                $ref: "#/components/schemas/ArticlePublishStream"
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleSaveResponse"
+              examples:
+                updated:
+                  summary: 文章更新成功
+                  value:
+                    error: 0
+                    message: 已发布
+                    data:
+                      article:
+                        logId: 42
+                        version: 1
+                        title: Hello ZrLog, updated
+                        typeId: 1
+                        alias: hello-zrlog
+                        content: <p>Updated content</p>
+                        markdown: "# Updated content"
+                        thumbnail: ""
+                        keywords: zrlog,java
+                        digest: Updated digest
+                        editorType: markdown
+                        canComment: true
+                        recommended: false
+                        rubbish: false
+                        privacy: false
+                expired:
+                  summary: 文章版本冲突
+                  value:
+                    error: 9094
+                    message: 文章内容已过期，请刷新页面后在最新内容上继续编辑
+                unauthenticated:
+                  summary: 管理员凭证无效
+                  value:
+                    error: 9001
+                    message: 会话超时，请重新登录
+  /api/admin/upload:
+    post:
+      tags:
+        - Upload
+      summary: 上传通用附件
+      description: |-
+        需要 `asset.upload`。普通成员的上传路径被限制在自己的 `attached/users/{userId}` 目录；
+        管理员继续使用指定目录。相同文件名仅可能覆盖该账号目录中的资源。
+        上传单个附件。首选 multipart 字段 `imgFile`；`file` 仅作为现有调用方的兼容别名。
+        文件保存到 `/attached` 下，返回 URL 包含部署 context path；启用上传插件时，返回值也可能是远端绝对 URL。
+
+        本接口没有独立的 MIME、扩展名或文件大小白名单。调用方应提供带扩展名的文件，并自行限制允许的文件类型；
+        实际请求体上限由部署配置统一控制。数据库临时附件目录、缩略图入口和 `temporary` 参数不属于本文档范围。
+      operationId: uploadAttachment
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.UploadController#index
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 在本地 attached 目录创建或覆盖内容寻址文件
+        - 启用上传插件时尝试同步文件并以插件 URL 替换本地 URL
+        - 上传插件失败时记录日志并回退到本地 URL，不回滚本地文件
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      parameters:
+        - name: dir
+          in: query
+          required: false
+          description: "`/attached` 下的逻辑子目录；未传时使用 `thumbnail`；保留的 admin 临时附件目录不在支持范围内"
+          schema:
+            type: string
+            default: thumbnail
+          example: thumbnail
+        - name: name
+          in: query
+          required: false
+          description: "可选目标文件名；只使用 basename，未传或不合法时由服务端生成内容摘要文件名"
+          schema:
+            type: string
+          example: cover.png
+      requestBody:
+        required: true
+        description: "`imgFile` 与兼容字段 `file` 至少提供一个；同时提供时使用 `imgFile`。"
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/UploadAttachmentRequest"
+      responses:
+        "200":
+          description: |-
+            请求已处理。成功时 URL 位于 `data.url`；缺文件、鉴权失败或其他业务失败仍可能使用 HTTP 200，
+            调用方必须检查 `error`。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadAttachmentResponse"
+              examples:
+                local:
+                  summary: 返回本地附件 URL
+                  value:
+                    error: 0
+                    message: ""
+                    data:
+                      url: /sub/attached/image/20260807/31d6cfe0d16ae931b73c59d7e0c089c0.png
+                remote:
+                  summary: 上传插件返回远端 URL
+                  value:
+                    error: 0
+                    message: ""
+                    data:
+                      url: https://cdn.example.com/image/31d6cfe0d16ae931b73c59d7e0c089c0.png
+                missingFile:
+                  summary: 缺少上传文件
+                  value:
+                    error: 9012
+                    message: 参数错误 [imgFile]
+                unauthenticated:
+                  summary: 管理员凭证无效
+                  value:
+                    error: 9001
+                    message: 会话超时，请重新登录
+        "413":
+          description: 请求体超过当前部署配置允许的上限，在进入 Controller 前被拒绝
+  /api/admin/template/upload:
+    post:
+      tags:
+        - Template
+      summary: 上传或覆盖主题
+      description: |-
+        需要 `site.configure`（站长或管理员）。该权限同时覆盖其他站点配置操作，不仅限于主题上传。
+        上传 ZIP 主题包。`shortTemplate` 来自主题包文件名去掉 `.zip` 后的值。
+        新主题应传 `overwrite=false`；覆盖已有可删除主题前，调用方应先向用户确认并传 `overwrite=true`。
+        内置主题不能覆盖。主题包可以直接包含主题文件，也可以包含一个外层目录。
+
+        服务端在安装前校验主题标识、ZIP 路径、文件数量、解压总大小、主题元数据和入口模板。
+        覆盖时先备份旧目录，安装失败会尝试恢复。上传成功不会自动切换当前主题。
+      operationId: uploadTemplate
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.TemplateController#upload
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 创建或完整替换主题目录
+        - 成功后记录 UPLOAD_TEMPLATE 管理审计
+        - 异步刷新博客缓存并更新静态站状态
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      parameters:
+        - name: shortTemplate
+          in: query
+          required: true
+          description: 主题唯一标识，应与上传 ZIP 文件名去掉扩展名后的值一致
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          example: sheshui
+        - name: overwrite
+          in: query
+          required: false
+          description: 是否允许完整替换已存在的非内置主题
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: |-
+                    ZIP 主题包。最多 5000 个条目，解压后总大小不超过 100 MB；
+                    必须包含受支持的主题元数据和入口模板。
+      responses:
+        "200":
+          description: |-
+            请求已处理。调用方仍需检查响应中的 `error`：0 表示安装成功，非零表示业务拒绝或主题包无效。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadTemplateResponse"
+              examples:
+                installed:
+                  summary: 新主题安装成功
+                  value:
+                    error: 0
+                    message: 主题已上传
+                    data:
+                      shortTemplate: sheshui
+                      name: 涉水
+                      version: 1.0.0
+                      overwritten: false
+                overwritten:
+                  summary: 已有主题覆盖成功
+                  value:
+                    error: 0
+                    message: 主题已上传
+                    data:
+                      shortTemplate: sheshui
+                      name: 涉水
+                      version: 1.1.0
+                      overwritten: true
+                rejected:
+                  summary: 未确认覆盖已有主题
+                  value:
+                    error: 1
+                    message: 主题已存在，请确认覆盖后重试
+        "401":
+          description: 管理员凭证缺失或无效
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        default:
+          description: 参数缺失或未处理错误
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+  /api/webhook/message-center/notice:
+    post:
+      tags: [Notification]
+      summary: 发送消息中心通知
+      description: 需要 notification.create 权限，且站点已开启接收外部通知；相同 taskKey 会替换已有通知
+      operationId: createExternalNotification
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.WebhookController#messageCenterNotice
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 写入站点消息中心通知，保留最近 50 条
+      security:
+        - AccessTokenBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: {type: string, maxLength: 120}
+                description: {type: string, maxLength: 2000}
+                taskKey: {type: string, maxLength: 120}
+                source: {type: string, maxLength: 80}
+                actionLabel: {type: string, maxLength: 80}
+                actionPath: {type: string, maxLength: 255}
+                closable: {type: boolean, default: true}
+                updatedAt: {type: integer, format: int64}
+                payload: {type: object, additionalProperties: true}
+      responses:
+        "200":
+          description: 处理结果；必须检查 error 是否为 0
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: {type: integer}
+                  message: {type: string}
+                  data:
+                    type: object
+                    properties:
+                      taskKey: {type: string}
+                      updatedAt: {type: integer, format: int64}
+        "401":
+          description: Bearer 无效或已失效
+        "403":
+          description: 缺少发送通知权限
+components:
+  responses:
+    Unauthorized:
+      description: 管理员凭证缺失、无效或已失效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    Forbidden:
+      description: 缺少操作权限，或文章不存在/不属于当前账号可访问范围
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    ApiError:
+      description: 参数错误、权限错误或未处理异常；必须检查 error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    CategoryWriteResult:
+      description: 分类写入结果；error=0 表示业务成功，非零表示失败，无新分类 ID
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CategoryWriteResponse"
+          example: {error: 0, message: 更新成功}
+        text/event-stream:
+          x-zrlog-stream:
+            completionEvent: refresh-complete
+            errorEvents: [static-error, sse-error]
+          schema:
+            type: string
+            description: |-
+              UTF-8 SSE。response 和 refresh-complete 的 data 为 CategoryWriteResponse，均需检查 error。
+              response 仅确认业务方法已返回，refresh-complete 才确认刷新完成。
+              static-error/sse-error 或缺少完成事件的断流表示刷新未确认完成，但写入可能已经成功；不得自动重试写入。
+  securitySchemes:
+    AccessTokenBearer:
+      type: http
+      scheme: bearer
+      description: 新个人访问令牌，或 resource 为站点 /api/admin 的 OAuth access token；按账号 Action 与令牌授权检查
+    AdminTokenHeader:
+      type: apiKey
+      in: header
+      name: X-ZrLog-Admin-Token
+      description: 管理员令牌；存在时优先于 Cookie
+    AdminTokenCookie:
+      type: apiKey
+      in: cookie
+      name: admin-token
+      description: 后台登录建立的管理员会话 Cookie
+  schemas:
+    ArticleListResponse:
+      oneOf:
+        - type: object
+          required: [error, message, data]
+          properties:
+            error: {type: integer, const: 0}
+            message: {type: string}
+            data:
+              type: object
+              required: [page, size, totalElements, rows]
+              properties:
+                page: {type: integer, minimum: 1}
+                size: {type: integer, minimum: 1}
+                totalElements: {type: integer, minimum: 0}
+                rows:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/ArticleListItem"
+                sort: {type: array, items: {type: string}}
+                key: {type: string}
+                status: {type: string}
+              additionalProperties: true
+          additionalProperties: true
+        - $ref: "#/components/schemas/ApiErrorResponse"
+    ArticleListItem:
+      type: object
+      description: 列表投影；不提供 logId、version、typeId、content、editorType 等完整更新字段
+      required: [id, title, alias, rubbish, privacy]
+      properties:
+        id: {type: integer, format: int64, minimum: 1}
+        title: {type: string}
+        alias: {type: string}
+        typeAlias: {type: [string, "null"]}
+        typeName: {type: [string, "null"]}
+        markdown: {type: [string, "null"]}
+        digest: {type: [string, "null"]}
+        keywords: {type: [string, "null"]}
+        thumbnail: {type: [string, "null"]}
+        canComment: {type: boolean}
+        recommended: {type: boolean}
+        rubbish: {type: boolean}
+        privacy: {type: boolean}
+        url: {type: string, format: uri-reference, description: 草稿或私密文章为后台预览路径；公开文章为博客 URL}
+        releaseTime: {type: string, description: yyyy-MM-dd 日期文本}
+        lastUpdateDate: {type: string, description: yyyy-MM-dd 日期文本，不是详情中的毫秒时间戳}
+      additionalProperties: true
+    CategoryListResponse:
+      oneOf:
+        - type: object
+          required: [error, message, data]
+          properties:
+            error: {type: integer, const: 0}
+            message: {type: string}
+            data:
+              type: object
+              required: [rows]
+              properties:
+                rows:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Category"
+              additionalProperties: true
+          additionalProperties: true
+        - $ref: "#/components/schemas/ApiErrorResponse"
+    Category:
+      type: object
+      required: [id, typeName, alias]
+      properties:
+        id: {type: integer, format: int64, minimum: 1}
+        typeName: {type: string}
+        alias: {type: string}
+        remark: {type: [string, "null"]}
+        amount: {type: integer, minimum: 0, description: 分类下全部文章数量，包含草稿和私密文章}
+        typeamount: {type: integer, minimum: 0, description: 与 amount 相同的兼容字段}
+        url: {type: string, format: uri-reference}
+      additionalProperties: true
+    CategoryWriteFields:
+      type: object
+      required: [typeName, alias]
+      properties:
+        typeName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+          description: 分类名称，不能仅含空白；服务端移除 HTML
+        alias:
+          type: string
+          minLength: 1
+          pattern: '\S'
+          description: 分类别名，不能仅含空白；服务端移除 HTML，不保证唯一
+        remark:
+          type: [string, "null"]
+          description: 分类说明；省略或为 null 时保存为空字符串，HTML 按 basicWithImages 安全规则清理
+    CategoryCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/CategoryWriteFields"
+      unevaluatedProperties: false
+    CategoryUpdateRequest:
+      allOf:
+        - $ref: "#/components/schemas/CategoryWriteFields"
+        - type: object
+          required: [id]
+          properties:
+            id: {type: integer, format: int64, minimum: 1, description: 已存在的分类 ID}
+      unevaluatedProperties: false
+    CategoryWriteResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: {type: integer, minimum: 0, description: 0 表示写入成功，非零为失败}
+        message: {type: string}
+        data: {type: "null", description: 不返回分类对象；可能省略}
+      additionalProperties: true
+    ApiErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: integer
+          description: 非零业务错误码
+          minimum: 1
+        message:
+          type: string
+          description: 本地化错误消息
+      additionalProperties: true
+    ArticleWriteFields:
+      type: object
+      description: 文章创建和全量更新共享的可写字段
+      required:
+        - title
+        - typeId
+        - canComment
+        - privacy
+        - recommended
+        - rubbish
+      properties:
+        title:
+          type: string
+          minLength: 1
+          description: 文章标题；服务端会清理 HTML
+        typeId:
+          type: integer
+          format: int64
+          minimum: 1
+          description: 已存在的文章分类 ID
+        content:
+          type:
+            - string
+            - "null"
+          description: 已渲染的 HTML 正文；Markdown 模式下为空或省略时，Java 17 及以上根据 markdown 生成，Java 11 跳过渲染并记录警告
+        markdown:
+          type:
+            - string
+            - "null"
+          description: 可选的 Markdown 编辑源；Java 17 及以上在 Markdown 模式且 content 为空时用于生成 HTML
+        thumbnail:
+          type:
+            - string
+            - "null"
+          description: 封面 URL 或站内路径；更新时省略会清空
+        alias:
+          type:
+            - string
+            - "null"
+          description: 文章别名；更新时省略或留空会重置为数字 ID
+        keywords:
+          type:
+            - string
+            - "null"
+          description: 关键词文本；更新时省略会清空
+        digest:
+          type:
+            - string
+            - "null"
+          description: 摘要；公开文章留空时可能按站点配置自动生成
+        editorType:
+          type:
+            - string
+            - "null"
+          description: 编辑器类型，例如 markdown 或 html；更新时省略会清空
+        canComment:
+          type: boolean
+          description: 是否允许评论
+        privacy:
+          type: boolean
+          description: 是否为私密文章；与 rubbish 共同决定公开状态
+        recommended:
+          type: boolean
+          description: 是否推荐
+        rubbish:
+          type: boolean
+          description: true 表示草稿且不公开；false 时由 privacy 决定公开或私密
+        transparentPublish:
+          type: boolean
+          default: false
+          description: true 且 rubbish=false、privacy=false 时返回发布 SSE；其他情况返回普通 JSON
+    ArticlePublishStream:
+      type: string
+      description: |-
+        UTF-8 SSE。article 事件的数据为 ArticleSaveResponse，表示文章已保存；
+        publish-complete 是成功终止事件，static-error/publish-error/sse-error 表示失败。
+        业务错误事件保留数字 error 字段；article 之前的 error=9094 表示版本冲突，写入被拒绝。
+        static-progress 等事件报告进度，publish-check-error 为非致命检查提示。
+        缺少完成事件的断流或超时不能视为成功，不得自动重试写入。
+        完整协议见 docs/api/article-publish-sse.md。
+    ArticleCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/ArticleWriteFields"
+        - type: object
+          properties:
+            preserveDraftAiMessages:
+              type: boolean
+              default: false
+              description: 独立自动化调用建议为 true，以保留后台编辑器中尚未归属文章的临时上下文
+      unevaluatedProperties: false
+    ArticleUpdateRequest:
+      allOf:
+        - $ref: "#/components/schemas/ArticleWriteFields"
+        - type: object
+          required:
+            - logId
+            - version
+          properties:
+            logId:
+              type: integer
+              format: int32
+              minimum: 1
+              description: 要更新的文章 ID
+            version:
+              type: integer
+              format: int32
+              minimum: 0
+              description: 最近一次文章读取或保存响应中的版本号
+      unevaluatedProperties: false
+    ArticleSaveResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ArticleSaveSuccessResponse"
+        - $ref: "#/components/schemas/ApiErrorResponse"
+    ArticleSaveSuccessResponse:
+      type: object
+      required:
+        - error
+        - message
+        - data
+      properties:
+        error:
+          type: integer
+          const: 0
+        message:
+          type: string
+          description: 本地化的保存或发布结果消息
+        data:
+          $ref: "#/components/schemas/ArticleSaveData"
+      description: 实际响应还包含 admin 页面 hydration 元数据，调用方不应依赖这些 UI 字段
+      additionalProperties: true
+    ArticleSaveData:
+      type: object
+      required:
+        - article
+      properties:
+        article:
+          $ref: "#/components/schemas/ArticleSnapshot"
+      description: 实际响应还包含分类、标签和编辑器配置等 UI 数据
+      additionalProperties: true
+    ArticleSnapshot:
+      allOf:
+        - $ref: "#/components/schemas/ArticleWriteFields"
+        - type: object
+          required:
+            - logId
+            - version
+          properties:
+            logId:
+              type: integer
+              format: int32
+              minimum: 1
+            version:
+              type: integer
+              format: int32
+              minimum: 0
+      description: 读取或保存后的完整文章快照；更新时提取全部可写字段与 logId、version，排除只读字段和 UI 元数据
+      additionalProperties: true
+    UploadAttachmentRequest:
+      type: object
+      anyOf:
+        - required:
+            - imgFile
+        - required:
+            - file
+      properties:
+        imgFile:
+          type: string
+          format: binary
+          description: 首选的单文件上传字段
+        file:
+          type: string
+          format: binary
+          deprecated: true
+          description: 兼容旧调用方的单文件字段；新调用方使用 imgFile
+      additionalProperties: false
+    UploadAttachmentResponse:
+      oneOf:
+        - $ref: "#/components/schemas/UploadAttachmentSuccessResponse"
+        - $ref: "#/components/schemas/ApiErrorResponse"
+    UploadAttachmentSuccessResponse:
+      type: object
+      required:
+        - error
+        - message
+        - data
+      properties:
+        error:
+          type: integer
+          const: 0
+        message:
+          type: string
+        data:
+          $ref: "#/components/schemas/UploadAttachmentData"
+    UploadAttachmentData:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri-reference
+          description: 包含 context path 的站内 URL，或上传插件返回的绝对 URL
+    UploadTemplateResponse:
+      oneOf:
+        - $ref: "#/components/schemas/UploadTemplateSuccessResponse"
+        - $ref: "#/components/schemas/ApiErrorResponse"
+    UploadTemplateSuccessResponse:
+      type: object
+      required:
+        - error
+        - message
+        - data
+      properties:
+        error:
+          type: integer
+          const: 0
+        message:
+          type: string
+        data:
+          $ref: "#/components/schemas/UploadTemplateData"
+    UploadTemplateData:
+      type: object
+      required:
+        - shortTemplate
+        - name
+        - overwritten
+      properties:
+        shortTemplate:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        name:
+          type: string
+          description: 主题元数据中的展示名称，缺失时回退为 shortTemplate
+        version:
+          type:
+            - string
+            - "null"
+          description: 主题元数据中的版本，未声明时为 null 或不输出
+        overwritten:
+          type: boolean
+          description: 本次安装是否替换了已有主题目录

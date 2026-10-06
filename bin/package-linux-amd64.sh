@@ -58,6 +58,7 @@ binary_name=zrlogctl-linux-amd64
   -Pnative \
   clean package
 
+python3 bin/test-native-openapi.py target/zrlogctl
 python3 bin/test-native-proxy.py target/zrlogctl
 
 mkdir -p "${version_root}"

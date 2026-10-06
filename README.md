@@ -1,6 +1,18 @@
 # zrlogctl
 
-`zrlogctl` 是 ZrLog 的非图形化系统管理助手，面向 AI、自动化脚本和 CI。首期使用 GraalVM Java 25 构建 Linux AMD64 Native Image，只通过 ZrLog 现有后台 HTTP JSON API 工作，不要求安装到 ZrLog 发布目录，也不发布通用 Jar。
+`zrlogctl` 是 ZrLog 的非图形化系统管理助手，面向 AI、自动化脚本和 CI。使用 GraalVM Java 25 构建 Linux AMD64 Native Image，通过 ZrLog HTTP API 工作，不要求安装到 ZrLog 发布目录，也不发布通用 Jar。
+
+`api` 命令在运行时读取 OpenAPI 3.1 YAML/JSON，按 `operationId` 发现和调用接口，无须代码生成：
+
+```bash
+zrlogctl api list
+zrlogctl api describe uploadAttachment
+zrlogctl api call uploadAttachment --query dir=guides --file imgFile=cover.png
+zrlogctl api --spec /path/to/openapi.yaml list
+zrlogctl api call createArticle --body @article.json --dry-run
+```
+
+默认使用内置后台契约，`--source blog-web` 选择公开博客契约，`--spec` 覆盖为本地文件。调用复用现有站点配置和登录；公开操作不发送凭证。参数、表单、SSE 与支持边界见 [OpenAPI 运行时调用](docs/openapi.md)。
 
 ## 安装
 
@@ -206,7 +218,7 @@ zrlogctl update apply
 ./bin/package-linux-amd64.sh /tmp/zrlogctl-release
 ```
 
-打包脚本在生成发布文件前运行 `python3 bin/test-native-proxy.py target/zrlogctl`。测试启动本机认证代理和 IPv4 HTTPS 服务，实际运行 `article list` 和 `update check`，覆盖 IPv4、IPv6 字面量、仅解析到 IPv6 的代理主机名、IPv4 排在前面的双地址代理、首次 CONNECT 认证、代理凭据隔离及死端口禁止回退直连。双地址测试让 IPv4 监听器返回策略明文，要求请求只到达正常转发的 IPv6 监听器。证书和 hosts 文件均为临时测试数据，不依赖外部网络或真实令牌。
+打包脚本在生成发布文件前运行 `python3 bin/test-native-openapi.py target/zrlogctl`，验证内置契约、编译后新增接口的运行时调用、Schema 校验、参数编码、认证、上传与 SSE；随后运行 `python3 bin/test-native-proxy.py target/zrlogctl`。代理测试启动本机认证代理和 IPv4 HTTPS 服务，实际运行 `article list` 和 `update check`，覆盖 IPv4、IPv6 字面量、仅解析到 IPv6 的代理主机名、IPv4 排在前面的双地址代理、首次 CONNECT 认证、代理凭据隔离及死端口禁止回退直连。双地址测试让 IPv4 监听器返回策略明文，要求请求只到达正常转发的 IPv6 监听器。证书和 hosts 文件均为临时测试数据，不依赖外部网络或真实令牌。
 
 TLS 测试在原生编译后生成新的 CA 和签发证书，通过运行时 PEM 目录或证书包建立信任，不使用 Java truststore 文件。测试服务优先提供 HTTP/2，验证客户端仍使用 HTTP/1.1，并确认不可信 CA、错误主机名和过期证书均被拒绝。
 

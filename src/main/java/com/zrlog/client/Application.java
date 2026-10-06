@@ -32,7 +32,8 @@ import java.util.concurrent.Callable;
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class,
                 Application.MediaGroup.class, Application.ThemeGroup.class,
                 Application.ContentGroup.class, Application.UpdateGroup.class,
-                Application.Login.class, Application.Logout.class, Application.NotificationGroup.class})
+                Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
+                OpenApiCommands.class})
 public class Application implements Runnable {
 
     @Option(names = "--site", scope = CommandLine.ScopeType.INHERIT,
@@ -70,6 +71,8 @@ public class Application implements Runnable {
 
     static CommandLine commandLine(Application application) {
         CommandLine commandLine = new CommandLine(application);
+        // @path is an API body file, never a picocli file containing more CLI arguments.
+        commandLine.setExpandAtFiles(false);
         commandLine.setParameterExceptionHandler((error, args) -> {
             boolean json = application.output == Output.json || requestsJson(args);
             if (json) {
@@ -141,6 +144,13 @@ public class Application implements Runnable {
     ContentService contentService() {
         ZrLogApi api = api();
         return new ContentService(api, api.http().config().baseUri());
+    }
+
+    java.net.URI openApiSite() {
+        String value = resolvedSite();
+        if (value == null || value.isBlank()) throw new ApiException("Set --site, site_url in zrlog.json, or ZRLOG_SITE_URL", 3, null, null);
+        try { return ClientConfig.normalizeBaseUri(java.net.URI.create(value)); }
+        catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
     }
 
     void publishProgress(String event, com.google.gson.JsonObject data) {
