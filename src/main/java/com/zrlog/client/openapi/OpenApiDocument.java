@@ -6,7 +6,6 @@ import org.snakeyaml.engine.v2.api.Load;
 import org.snakeyaml.engine.v2.api.LoadSettings;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,11 +22,7 @@ public final class OpenApiDocument {
     public static OpenApiDocument load(Path path, String source) {
         try {
             if (path != null) return parse(Files.readString(path));
-            if (!Set.of("admin-web", "blog-web").contains(source)) throw invalid("Unknown API source: " + source);
-            try (InputStream input = OpenApiDocument.class.getResourceAsStream("/openapi/" + source + ".yaml")) {
-                if (input == null) throw invalid("Missing bundled API definition: " + source);
-                return parse(new String(input.readAllBytes(), StandardCharsets.UTF_8));
-            }
+            return OpenApiCatalog.load(source);
         } catch (IOException e) { throw new ApiException("Unable to read OpenAPI definition: " + e.getMessage(), 3, e); }
     }
 

@@ -17,7 +17,7 @@ import threading
 
 
 ARTICLES = {"error": 0, "data": {"page": 1, "size": 100, "totalElements": 0, "rows": []}}
-ARTICLE_PATH = "/sub/api/admin/article?page=1&size=100&sort=id%2Cdesc"
+ARTICLE_PATH = "/sub/api/admin/article?page=1&size=100&sort=id%2Cdesc&status="
 USERINFO = "u%40ser+name:p%3Aa%40ss%25+word"
 PROXY_AUTH = "Basic " + base64.b64encode(b"u@ser+name:p:a@ss%+word").decode()
 

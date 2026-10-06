@@ -32,7 +32,7 @@ class ZrLogApiTest {
     void setUp() throws IOException {
         server = new MockWebServer();
         server.start();
-        api = new ZrLogApi(new ZrLogHttpClient(new ClientConfig(server.url("/").uri(), "token", Duration.ofSeconds(2))));
+        api = new ZrLogApi(new ZrLogOpenApiClient(new ClientConfig(server.url("/").uri(), "token", Duration.ofSeconds(2))));
     }
 
     @AfterEach

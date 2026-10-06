@@ -37,7 +37,7 @@ class ProxyEnvironmentHttpTest {
     void routesApiRequestsThroughHttpProxyAndKeepsHeadersAndContextPath() throws Exception {
         try (MockWebServer proxy = new MockWebServer()) {
             proxy.start(InetAddress.getByName("127.0.0.1"), 0);
-            proxy.enqueue(new MockResponse().setBody(CATEGORIES));
+            proxy.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(CATEGORIES));
             Result result = run(Map.of("HTTP_PROXY", "http://127.0.0.1:" + proxy.getPort()),
                     "--site", SITE, "--token", "test-token", "category", "list");
             assertEquals(0, result.exitCode(), result.output());
@@ -55,7 +55,7 @@ class ProxyEnvironmentHttpTest {
             proxy.setDispatcher(new Dispatcher() {
                 @Override public MockResponse dispatch(RecordedRequest request) {
                     return proxyAuthorization().equals(request.getHeader("Proxy-Authorization"))
-                            ? new MockResponse().setBody(CATEGORIES) : new MockResponse().setResponseCode(403);
+                            ? new MockResponse().setHeader("Content-Type", "application/json").setBody(CATEGORIES) : new MockResponse().setResponseCode(403);
                 }
             });
             String token = "zrpat_" + "a".repeat(43);
@@ -75,7 +75,7 @@ class ProxyEnvironmentHttpTest {
         try (MockWebServer proxy = new MockWebServer(); MockWebServer origin = new MockWebServer()) {
             proxy.start(InetAddress.getByName("127.0.0.1"), 0);
             origin.start();
-            origin.enqueue(new MockResponse().setBody(CATEGORIES));
+            origin.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(CATEGORIES));
             Result result = run(Map.of("HTTP_PROXY", authenticatedUrl(proxy), "NO_PROXY", "localhost,127.0.0.1", "ZRLOG_PROXY_DEBUG", "1"),
                     "--site", origin.url("/sub").toString(), "--token", "test-token", "category", "list");
             assertEquals(0, result.exitCode(), result.output());
@@ -93,7 +93,7 @@ class ProxyEnvironmentHttpTest {
         try (ServerSocket socket = new ServerSocket(0)) { unusedPort = socket.getLocalPort(); }
         try (MockWebServer origin = new MockWebServer()) {
             origin.start();
-            origin.enqueue(new MockResponse().setBody(CATEGORIES));
+            origin.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(CATEGORIES));
             Result result = run(Map.of("HTTP_PROXY", "http://user:secret@127.0.0.1:" + unusedPort),
                     "--site", origin.url("/sub").toString(), "--token", "test-token", "category", "list");
             assertEquals(5, result.exitCode(), result.output());
@@ -141,10 +141,10 @@ class ProxyEnvironmentHttpTest {
         store.update(old -> new OAuthTokens(SITE, "a".repeat(43), "r".repeat(43), 1, "taxonomy.read offline_access"));
         try (MockWebServer proxy = new MockWebServer()) {
             proxy.start(InetAddress.getByName("127.0.0.1"), 0);
-            proxy.enqueue(new MockResponse().setBody("""
+            proxy.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("""
                     {"access_token":"%s","refresh_token":"%s","expires_in":600,"token_type":"Bearer"}
                     """.formatted("b".repeat(43), "s".repeat(43))));
-            proxy.enqueue(new MockResponse().setBody(CATEGORIES));
+            proxy.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(CATEGORIES));
             Map<String, String> environment = Map.of("all_proxy", "http://127.0.0.1:" + proxy.getPort());
             Result refresh = run(environment, "--site", SITE, "category", "list");
             assertEquals(0, refresh.exitCode(), refresh.output());
@@ -153,7 +153,7 @@ class ProxyEnvironmentHttpTest {
             assertTrue(token.getBody().readUtf8().contains("grant_type=refresh_token"));
             assertEquals("Bearer " + "b".repeat(43), take(proxy).getHeader("Authorization"));
 
-            proxy.enqueue(new MockResponse().setBody("{}"));
+            proxy.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("{}"));
             Result revoke = run(environment, "--site", SITE, "logout");
             assertEquals(0, revoke.exitCode(), revoke.output());
             assertEquals("POST " + SITE + "/oauth/revoke HTTP/1.1", take(proxy).getRequestLine());
@@ -211,7 +211,7 @@ class ProxyEnvironmentHttpTest {
         try (MockWebServer proxy = new MockWebServer()) {
             proxy.start(InetAddress.getByName("::1"), 0);
             boolean tunnel = scheme.equals("https");
-            proxy.enqueue(tunnel ? new MockResponse().setResponseCode(502) : new MockResponse().setBody(CATEGORIES));
+            proxy.enqueue(tunnel ? new MockResponse().setResponseCode(502) : new MockResponse().setHeader("Content-Type", "application/json").setBody(CATEGORIES));
             String proxyHost = hostname ? "v6-proxy.invalid" : "[::1]";
             String proxyUrl = "http://u%40ser+name:p%3Aa%40ss%25+word@" + proxyHost + ":" + proxy.getPort();
             Result result = runWithProperties(List.of("-Djdk.net.hosts.file=" + hosts),

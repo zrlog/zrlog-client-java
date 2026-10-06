@@ -1,30 +1,42 @@
 #!/usr/bin/env python3
-"""Copy authoritative ZrLog contracts into the CLI's offline resource snapshots."""
+"""Sync the zrlog-api catalog and its verified offline contract snapshots."""
 import argparse
+import hashlib
+import json
 from pathlib import Path
-import sys
+import re
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check", action="store_true", help="Check snapshots without writing")
-    parser.add_argument("--workspace", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument('--check', action='store_true')
+    parser.add_argument('--workspace', type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
-    destination = Path(__file__).resolve().parents[1] / "src/main/resources/openapi"
-    for name, repository in (("admin-web", "zrlog-admin-web"), ("blog-web", "zrlog-blog-web-parent")):
-        source = args.workspace / repository / "docs/api/openapi.yaml"
-        target = destination / f"{name}.yaml"
-        if not source.is_file():
-            sys.exit(f"Missing authoritative contract: {source}")
-        data = source.read_bytes()
+    source = args.workspace / 'zrlog-api'
+    target = Path(__file__).resolve().parents[1] / 'src/main/resources/openapi'
+    index = (source / 'index.json').read_bytes()
+    catalog = json.loads(index)
+    if catalog['schemaVersion'] != 1 or not catalog['sources']:
+        raise ValueError('Unsupported or empty zrlog-api catalog')
+    files = {'index.json': index}
+    for entry in catalog['sources']:
+        name = entry['file']
+        if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', entry['id']) or name != entry['id'] + '.yaml' or name in files:
+            raise ValueError(f'Invalid or duplicate API source: {entry["id"]}')
+        data = (source / name).read_bytes()
+        if hashlib.sha256(data).hexdigest() != entry['sha256']:
+            raise ValueError(f'Stale zrlog-api index: {name}; regenerate index.json first')
+        files[name] = data
+    for name, data in files.items():
+        destination = target / name
         if args.check:
-            if not target.is_file() or target.read_bytes() != data:
-                sys.exit(f"Stale snapshot: {target}; run bin/sync-openapi.py")
+            if not destination.is_file() or destination.read_bytes() != data:
+                raise ValueError(f'Stale snapshot: {destination}; run bin/sync-openapi.py')
         else:
-            destination.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-        print(f"{'Checked' if args.check else 'Updated'} {name}")
+            target.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+    print(f'{"Checked" if args.check else "Synced"} {len(files) - 1} contracts and zrlog-api index')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

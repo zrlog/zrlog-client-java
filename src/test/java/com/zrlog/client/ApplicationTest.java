@@ -253,7 +253,7 @@ class ApplicationTest {
             assertEquals(0, Application.commandLine(isolatedApplication("tmp")).execute("article", "list"));
             var refresh=server.takeRequest(); assertEquals("/sub/oauth/token",refresh.getPath());
             assertTrue(refresh.getBody().readUtf8().contains("grant_type=refresh_token"));
-            var api=server.takeRequest(); assertEquals("/sub/api/admin/article?page=1&size=100&sort=id%2Cdesc",api.getPath());
+            var api=server.takeRequest(); assertEquals("/sub/api/admin/article?page=1&size=100&sort=id%2Cdesc&status=",api.getPath());
             assertEquals("Bearer "+"b".repeat(43),api.getHeader("Authorization"));
             assertEquals(null,api.getHeader("X-ZrLog-Admin-Token"));
             server.enqueue(new MockResponse().setBody("{}"));

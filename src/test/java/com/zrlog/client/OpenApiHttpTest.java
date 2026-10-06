@@ -26,6 +26,15 @@ class OpenApiHttpTest {
 
     @Test void listsAndDescribesBundledContractsWithoutSiteOrLogin() {
         Application app = application(); app.site = null; app.tokenValue = null;
+        Captured catalog = run(app, "api", "sources");
+        assertEquals(0, catalog.status, catalog.err);
+        var sources = JsonParser.parseString(catalog.out).getAsJsonArray();
+        assertEquals(2, sources.size());
+        for (var source : sources) {
+            String id = source.getAsJsonObject().get("id").getAsString();
+            assertEquals(source.getAsJsonObject().getAsJsonArray("operations").size(),
+                    OpenApiDocument.load(null, id).operations().size());
+        }
         Captured listed = run(app, "api", "list");
         assertEquals(0, listed.status, listed.err);
         assertEquals(10, JsonParser.parseString(listed.out).getAsJsonArray().size());

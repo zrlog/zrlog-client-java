@@ -9,7 +9,8 @@ info:
 x-zrlog-id: admin-web
 x-zrlog-display-name: 后台管理 API
 x-zrlog-owner-repository: https://github.com/zrlog/zrlog-admin-web
-x-zrlog-source-path: docs/api/openapi.yaml
+x-zrlog-contract-repository: https://github.com/zrlog/zrlog-api
+x-zrlog-source-path: admin-web.yaml
 x-zrlog-audience: authenticated-admin
 externalDocs:
   description: ZrLog API 文档网页

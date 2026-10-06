@@ -10,7 +10,7 @@ zrlogctl api list
 zrlogctl api describe createArticle
 
 # 加载正在开发的契约；--spec 优先于 --source
-zrlogctl api --spec ../zrlog-admin-web/docs/api/openapi.yaml list
+zrlogctl api --spec ../zrlog-api/admin-web.yaml list
 zrlogctl api --spec /path/to/openapi.yaml describe operationId
 
 # 校验请求，不读取凭证、不发起请求；@文件按 UTF-8 读取
@@ -56,7 +56,7 @@ JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用
 
 `api call listArticles` 每次只取一页。省略状态、每页条数或排序时，服务端使用账号的后台偏好；上面的示例显式传空 `status` 来查询全部可见状态。需要全部文章时，按返回的 `data.totalElements` 逐页读取并校验重复和数量变化。`getArticle` 返回 `data.article` 的完整快照；更新前提取可写字段以及 `logId`、`version`，不要回传只读字段或 UI 元数据。
 
-已有 `article list` 等便捷命令仍使用原有业务实现；补齐契约让通用 `api call` 可以调用同一批接口，不会自动把便捷命令迁移到 OpenAPI 调用器。
+`article`、`category`、`media`、`theme` 和通知便捷命令已按 operationId 调用同一个 OpenAPI 执行器，不再自行定义 HTTP 路径、方法或拼接查询参数。便捷命令保留自动分页、本地文件、文章版本和发布完成校验；`article list` 显式传空 `status`，避免后台筛选偏好漏掉文章。
 
 分类写入默认使用 JSON 并检查 `error`。如果选择 SSE，`response` 事件携带写入结果，`refresh-complete` 确认缓存刷新完成；通用调用器只按契约识别流完成/失败事件，事件 data 保留为字符串，调用方还需检查其中的业务 `error`。断流或刷新失败时写入可能已经完成，不能自动重试。
 
@@ -97,7 +97,7 @@ responses:
 
 ## 契约来源与维护
 
-`src/main/resources/openapi/admin-web.yaml` 与 `blog-web.yaml` 是离线发布快照。权威来源分别为 `zrlog-admin-web/docs/api/openapi.yaml` 与 `zrlog-blog-web-parent/docs/api/openapi.yaml`，不在客户端副本中独立修改接口。
+`src/main/resources/openapi/admin-web.yaml` 与 `blog-web.yaml` 是离线发布快照。统一来源为 `zrlog-api/admin-web.yaml`、`zrlog-api/blog-web.yaml` 与生成的 `zrlog-api/index.json`，不在客户端副本中独立修改接口。`api sources` 从该索引列出契约；加载时检查 SHA-256，新增契约无需修改 Java 中的来源白名单。服务端仓库中的 `docs/api/openapi.yaml` 也由统一来源生成。
 
 在包含这些仓库的工作区中同步：
 
@@ -110,3 +110,5 @@ python3 bin/sync-openapi.py --check
 单独检出客户端时可使用已提交的快照完成构建；`--spec` 直接读取指定版本，避免必须等待 CLI 发布。构建不抓取最新远程契约，也不对 YAML 进行 Maven 属性替换。契约本身的接口版本兼容仍由服务端维护。
 
 验证覆盖离线发现、新 YAML 接口调用、参数编码与作用域覆盖、Schema 组合、真实 multipart、认证选择、公开接口不发送凭证、业务错误、SSE 完成/失败/断流/超时，以及不重试行为。原生构建需额外验证资源包含和运行时 Schema 校验。
+
+`--accept` 可按偏好顺序传入多个已声明的媒体类型，例如 `--accept "text/event-stream, application/json"`，用于支持发布 SSE 及普通 JSON 回退。

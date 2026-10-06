@@ -37,7 +37,14 @@ def main():
                 data = b"event: progress\ndata: native\n\n"
                 content_type = "text/event-stream"
             else:
-                data = b'{"error":0,"native":true}'
+                payload = {"error": 0, "native": True}
+                if self.path.startswith("/sub/api/admin/upload"):
+                    payload["data"] = {"url": "/sub/attached/image.png"}
+                elif self.path.startswith("/sub/api/admin/template/upload"):
+                    payload["data"] = {"shortTemplate": "native-theme", "name": "Native", "overwritten": False}
+                elif self.path == "/sub/api/admin/article-type":
+                    payload["data"] = {"rows": []}
+                data = json.dumps(payload).encode()
                 content_type = "application/json"
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
@@ -66,6 +73,8 @@ def main():
                 assert result.returncode == status, (arguments, result.returncode, result.stderr)
                 return result
 
+            sources = json.loads(run("api", "sources").stdout)
+            assert {source["id"] for source in sources} == {"admin-web", "blog-web"}
             assert len(json.loads(run("api", "list").stdout)) == 10
             assert len(json.loads(run("api", "list", "--source", "blog-web").stdout)) == 5
             article = {"title": "Native draft", "typeId": 1, "canComment": True, "privacy": False,
@@ -125,7 +134,18 @@ def main():
             assert json.loads(complete.stderr.splitlines()[0])["data"] == "native"
             run("api", "--spec", "api.json", "call", "incomplete", status=5)
             assert len(requests) == 5, requests
-            print("Native OpenAPI checks passed: bundled contracts, runtime operations, schemas, encoding, auth, upload, SSE")
+            assert json.loads(run("--token", token, "category", "list").stdout) == []
+            media = run("--token", token, "media", "upload", "image.png")
+            assert json.loads(media.stdout)["url"] == "/sub/attached/image.png"
+            assert b"Content-Type: image/png" in requests[-1][3]
+            theme = directory / "native-theme"
+            theme.mkdir()
+            (theme / "index.ftl").write_text("Native theme")
+            run("--token", token, "theme", "upload", str(theme))
+            assert b'filename="native-theme.zip"' in requests[-1][3]
+            assert b"Content-Type: application/zip" in requests[-1][3]
+            assert len(requests) == 8, requests
+            print("Native OpenAPI checks passed: catalog, runtime operations, schemas, auth, SSE, category/media/theme commands")
     finally:
         server.shutdown()
         server.server_close()

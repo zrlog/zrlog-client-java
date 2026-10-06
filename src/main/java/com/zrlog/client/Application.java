@@ -135,7 +135,7 @@ public class Application implements Runnable {
             }
             ClientConfig detected = new ClientConfig(java.net.URI.create(resolvedSite), token.trim(), Duration.ofSeconds(timeout));
             ClientConfig config = new ClientConfig(detected.baseUri(), detected.token(), detected.timeout(), bearer || detected.bearer());
-            return new ZrLogApi(new ZrLogHttpClient(config), this::publishProgress);
+            return new ZrLogApi(new ZrLogOpenApiClient(config), this::publishProgress);
         } catch (IllegalArgumentException e) {
             throw new ApiException(e.getMessage(), 3, e);
         }

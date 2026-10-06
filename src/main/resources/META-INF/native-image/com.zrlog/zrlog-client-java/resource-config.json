@@ -1,5 +1,5 @@
 {
   "resources": {
-    "includes": [{"pattern": "openapi/.*\\.yaml"}]
+    "includes": [{"pattern": "openapi/.*\\.(yaml|json)"}]
   }
 }

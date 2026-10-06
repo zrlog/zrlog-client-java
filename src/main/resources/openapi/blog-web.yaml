@@ -8,7 +8,8 @@ info:
 x-zrlog-id: blog-web
 x-zrlog-display-name: 博客公开 API
 x-zrlog-owner-repository: https://github.com/zrlog/zrlog-blog-web-parent
-x-zrlog-source-path: docs/api/openapi.yaml
+x-zrlog-contract-repository: https://github.com/zrlog/zrlog-api
+x-zrlog-source-path: blog-web.yaml
 x-zrlog-audience: public
 externalDocs:
   description: ZrLog API 文档网页

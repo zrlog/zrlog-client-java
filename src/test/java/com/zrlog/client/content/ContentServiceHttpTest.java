@@ -6,7 +6,7 @@ import com.google.gson.JsonParser;
 import com.zrlog.client.ApiException;
 import com.zrlog.client.ClientConfig;
 import com.zrlog.client.ZrLogApi;
-import com.zrlog.client.ZrLogHttpClient;
+import com.zrlog.client.ZrLogOpenApiClient;
 import com.zrlog.client.model.Article;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
@@ -38,7 +38,7 @@ class ContentServiceHttpTest {
         server = new MockWebServer();
         server.start();
         site = server.url("/").uri();
-        ZrLogApi api = new ZrLogApi(new ZrLogHttpClient(new ClientConfig(site, "token", Duration.ofSeconds(2))));
+        ZrLogApi api = new ZrLogApi(new ZrLogOpenApiClient(new ClientConfig(site, "token", Duration.ofSeconds(2))));
         service = new ContentService(api, site);
     }
 

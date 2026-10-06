@@ -223,3 +223,5 @@ zrlogctl update apply
 TLS 测试在原生编译后生成新的 CA 和签发证书，通过运行时 PEM 目录或证书包建立信任，不使用 Java truststore 文件。测试服务优先提供 HTTP/2，验证客户端仍使用 HTTP/1.1，并确认不可信 CA、错误主机名和过期证书均被拒绝。
 
 版本由 `pom.xml` 的 `0.1` 基础版本和构建号组成，例如 `0.1.42`。脚本优先读取 `BUILD_NUMBER`，本地未设置时使用 Git 提交数；CI 使用 GitHub Actions run number。脚本拒绝非 Linux AMD64 平台，并生成可以直接同步到下载站的 `ctl/release` 目录。项目不构建或分发通用 Jar。
+
+OpenAPI 契约统一维护于 [zrlog-api](https://github.com/zrlog/zrlog-api)。`zrlogctl api sources` 列出内置契约，`api list` 索引操作，`api describe <operationId>` 查看定义，`api call <operationId>` 直接调用。文章、分类、上传及通知便捷命令也通过同一契约执行器发送请求。同步方式见 [OpenAPI 文档](docs/openapi.md)。

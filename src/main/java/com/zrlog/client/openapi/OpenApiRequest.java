@@ -15,7 +15,12 @@ public final class OpenApiRequest {
     private OpenApiRequest() { }
 
     public record Input(Map<String, List<String>> parameters, String body, List<String> fields,
-                        List<String> files, String contentType, String accept) { }
+                        List<String> files, String contentType, String accept, Map<String, String> filenames) {
+        public Input(Map<String, List<String>> parameters, String body, List<String> fields,
+                     List<String> files, String contentType, String accept) {
+            this(parameters, body, fields, files, contentType, accept, Map.of());
+        }
+    }
     public record Plan(OpenApiDocument.Operation operation, String path, Map<String, String> headers,
                        HttpRequest.BodyPublisher body, JsonObject preview) { }
 
@@ -92,8 +97,10 @@ public final class OpenApiRequest {
             }
         }
         if (requested != null) {
-            if (!types.contains(requested)) throw invalid("Response type is not declared: " + requested);
-            return requested;
+            List<String> accepted = Arrays.stream(requested.split(",", -1)).map(String::trim).toList();
+            for (String type : accepted)
+                if (!types.contains(type)) throw invalid("Response type is not declared: " + type);
+            return String.join(", ", accepted);
         }
         if (types.contains("application/json")) return "application/json";
         return types.isEmpty() ? null : types.iterator().next();
@@ -147,6 +154,7 @@ public final class OpenApiRequest {
                                                   JsonElement schema, Map<String, String> headers, JsonObject preview, OpenApiSchema validator) {
         Map<String, String> fields = OpenApiParameters.assignments(input.fields());
         Map<String, String> files = OpenApiParameters.assignments(input.files());
+        if (!files.keySet().containsAll(input.filenames().keySet())) throw invalid("Multipart filename override requires a file field");
         if (type.equals("application/x-www-form-urlencoded") && !files.isEmpty()) throw invalid("File uploads require multipart/form-data");
         JsonObject properties = validator.properties(schema), values = new JsonObject();
         Set<String> names = new LinkedHashSet<>(fields.keySet());
@@ -184,7 +192,7 @@ public final class OpenApiRequest {
             if (files.containsKey(name)) {
                 Path file = Path.of(files.get(name));
                 if (!Files.isRegularFile(file)) throw invalid("Upload file is not a regular file: " + file);
-                disposition += "; filename=\"" + quoted(file.getFileName().toString()) + "\"";
+                disposition += "; filename=\"" + quoted(input.filenames().getOrDefault(name, file.getFileName().toString())) + "\"";
                 try {
                     mime = Files.probeContentType(file);
                     if (mime == null) mime = "application/octet-stream";

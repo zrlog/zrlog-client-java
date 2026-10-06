@@ -9,8 +9,6 @@ import com.zrlog.client.model.Category;
 import com.zrlog.client.model.Theme;
 
 import java.io.IOException;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -26,25 +24,25 @@ import java.util.function.BiConsumer;
 public class ZrLogApi {
 
     private static final int PAGE_SIZE = 100;
-    private final ZrLogHttpClient http;
+    private final ZrLogOpenApiClient http;
     private final BiConsumer<String, JsonObject> publishProgress;
 
-    public ZrLogApi(ZrLogHttpClient http) { this(http, (event, data) -> { }); }
+    public ZrLogApi(ZrLogOpenApiClient http) { this(http, (event, data) -> { }); }
 
-    public ZrLogApi(ZrLogHttpClient http, BiConsumer<String, JsonObject> publishProgress) {
+    public ZrLogApi(ZrLogOpenApiClient http, BiConsumer<String, JsonObject> publishProgress) {
         this.http = http;
         this.publishProgress = publishProgress;
     }
 
     public com.zrlog.client.model.NotificationResult sendNotification(com.zrlog.client.model.NotificationRequest request) {
-        JsonObject result = data(http.post("/api/webhook/message-center/notice", JsonSupport.GSON.toJsonTree(request).getAsJsonObject()));
+        JsonObject result = data(http.call("createExternalNotification", Map.of(), JsonSupport.GSON.toJsonTree(request)));
         return new com.zrlog.client.model.NotificationResult(JsonSupport.string(result, "taskKey", ""), JsonSupport.number(result, "updatedAt"));
     }
 
-    ZrLogHttpClient http() { return http; }
+    ZrLogOpenApiClient http() { return http; }
 
     public List<Category> listCategories() {
-        JsonArray rows = data(http.get("/api/admin/article-type")).getAsJsonArray("rows");
+        JsonArray rows = data(http.call("listCategories", Map.of(), null)).getAsJsonArray("rows");
         if (rows == null) throw protocol("Category response has no data.rows");
         List<Category> result = new ArrayList<>();
         for (JsonElement element : rows) {
@@ -58,12 +56,12 @@ public class ZrLogApi {
     }
 
     public void createCategory(Map<String, String> category) {
-        http.post("/api/admin/type/add", JsonSupport.object(Map.of(
+        http.call("createCategory", Map.of(), JsonSupport.object(Map.of(
                 "typeName", category.get("name"), "alias", category.get("alias"), "remark", category.get("remark"))));
     }
 
     public void updateCategory(long id, Map<String, String> category) {
-        http.post("/api/admin/type/update", JsonSupport.object(Map.of(
+        http.call("updateCategory", Map.of(), JsonSupport.object(Map.of(
                 "id", id, "typeName", category.get("name"), "alias", category.get("alias"),
                 "remark", category.get("remark"))));
     }
@@ -73,8 +71,8 @@ public class ZrLogApi {
         Set<Long> ids = new HashSet<>();
         long expectedTotal = -1;
         for (int page = 1; ; page++) {
-            String query = "/api/admin/article?page=" + page + "&size=" + PAGE_SIZE + "&sort=id%2Cdesc";
-            JsonObject value = data(http.get(query));
+            JsonObject value = data(http.call("listArticles", Map.of("page", Integer.toString(page),
+                    "size", Integer.toString(PAGE_SIZE), "sort", "id,desc", "status", ""), null));
             long returnedPage = JsonSupport.number(value, "page");
             long size = JsonSupport.number(value, "size");
             long total = JsonSupport.number(value, "totalElements");
@@ -96,29 +94,29 @@ public class ZrLogApi {
     }
 
     public Article getArticle(long id) {
-        JsonObject response = http.get("/api/admin/article-edit?id=" + id);
+        JsonObject response = http.call("getArticle", Map.of("id", Long.toString(id)), null);
         JsonObject article = data(response).getAsJsonObject("article");
         if (article == null) throw protocol("Article detail response has no data.article");
         return Article.from(article);
     }
 
     public Article createArticle(ArticleSource source, Category category, boolean draft) {
-        JsonObject response = saveArticle("/api/admin/article/create", source, category, draft, null);
+        JsonObject response = saveArticle("createArticle", source, category, draft, null);
         JsonObject article = data(response).getAsJsonObject("article");
         if (article != null) return Article.from(article);
         return findUniqueByAlias(source.alias());
     }
 
     public Article updateArticle(ArticleSource source, Category category, Article current, boolean draft) {
-        JsonObject response = saveArticle("/api/admin/article/update", source, category, draft, current);
+        JsonObject response = saveArticle("updateArticle", source, category, draft, current);
         JsonObject article = data(response).getAsJsonObject("article");
         return article == null ? getArticle(current.id()) : Article.from(article);
     }
 
-    private JsonObject saveArticle(String path, ArticleSource source, Category category, boolean draft, Article current) {
+    private JsonObject saveArticle(String operationId, ArticleSource source, Category category, boolean draft, Article current) {
         JsonObject body = payload(source, category, draft, current);
         return body.get("transparentPublish").getAsBoolean()
-                ? http.postPublish(path, body, publishProgress) : http.post(path, body);
+                ? http.publish(operationId, body, publishProgress) : http.call(operationId, Map.of(), body);
     }
 
     public String upload(Path file, String directory) {
@@ -126,13 +124,10 @@ public class ZrLogApi {
             throw new ApiException("Upload directory contains unsupported characters", 3, null, null);
         }
         String name = file.getFileName().toString();
-        String mediaType = mediaType(name);
+        mediaType(name);
         try {
-            byte[] bytes = Files.readAllBytes(file);
-            if (bytes.length == 0) throw new ApiException("Upload source must not be empty", 3, null, null);
-            String path = "/api/admin/upload?dir=" + URLEncoder.encode(directory, StandardCharsets.UTF_8)
-                    + "&name=" + URLEncoder.encode(name, StandardCharsets.UTF_8);
-            JsonObject result = data(http.upload(path, "imgFile", name, mediaType, bytes));
+            if (Files.size(file) == 0) throw new ApiException("Upload source must not be empty", 3, null, null);
+            JsonObject result = data(http.upload("uploadAttachment", Map.of("dir", directory, "name", name), "imgFile", file));
             String url = JsonSupport.string(result, "url", "");
             if (url.isBlank()) throw protocol("Upload response has no data.url");
             return url;
@@ -151,20 +146,15 @@ public class ZrLogApi {
         String shortTemplate = directory ? sourceName : zipName(sourceName);
         validateThemeName(shortTemplate);
         Path archive = source;
-        String uploadName = sourceName;
         try {
             if (directory) {
                 archive = ThemeArchive.create(source);
-                uploadName = shortTemplate + ".zip";
             } else if (!Files.isRegularFile(source)) {
                 throw new ApiException("Theme source must be a regular file or directory", 3, null, null);
             }
-            byte[] bytes = Files.readAllBytes(archive);
-            if (bytes.length == 0) throw new ApiException("Theme package must not be empty", 3, null, null);
-            String path = "/api/admin/template/upload?shortTemplate="
-                    + URLEncoder.encode(shortTemplate, StandardCharsets.UTF_8)
-                    + "&overwrite=" + overwrite;
-            JsonObject result = data(http.upload(path, "file", uploadName, "application/zip", bytes));
+            if (Files.size(archive) == 0) throw new ApiException("Theme package must not be empty", 3, null, null);
+            JsonObject result = data(http.upload("uploadTemplate", Map.of("shortTemplate", shortTemplate,
+                    "overwrite", Boolean.toString(overwrite)), "file", archive, shortTemplate + ".zip"));
             if (!result.has("shortTemplate") || JsonSupport.string(result, "shortTemplate", "").isBlank()) {
                 throw protocol("Theme upload response has no data.shortTemplate");
             }

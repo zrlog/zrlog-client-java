@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "admin-web",
+      "file": "admin-web.yaml",
+      "title": "ZrLog Admin Web API",
+      "version": "3.5.9-SNAPSHOT",
+      "sha256": "a3ae41cfa4c29a3febe14cde876fc31a5fc54f5e77f34d42a45ce72e69f8ca81",
+      "operations": [
+        {
+          "operationId": "listArticles",
+          "method": "GET",
+          "path": "/api/admin/article",
+          "summary": "分页查询后台文章"
+        },
+        {
+          "operationId": "getArticle",
+          "method": "GET",
+          "path": "/api/admin/article-edit",
+          "summary": "读取完整文章快照"
+        },
+        {
+          "operationId": "listCategories",
+          "method": "GET",
+          "path": "/api/admin/article-type",
+          "summary": "查询全部文章分类"
+        },
+        {
+          "operationId": "createCategory",
+          "method": "POST",
+          "path": "/api/admin/type/add",
+          "summary": "创建文章分类"
+        },
+        {
+          "operationId": "updateCategory",
+          "method": "POST",
+          "path": "/api/admin/type/update",
+          "summary": "全量更新文章分类"
+        },
+        {
+          "operationId": "createArticle",
+          "method": "POST",
+          "path": "/api/admin/article/create",
+          "summary": "创建文章"
+        },
+        {
+          "operationId": "updateArticle",
+          "method": "POST",
+          "path": "/api/admin/article/update",
+          "summary": "全量更新文章"
+        },
+        {
+          "operationId": "uploadAttachment",
+          "method": "POST",
+          "path": "/api/admin/upload",
+          "summary": "上传通用附件"
+        },
+        {
+          "operationId": "uploadTemplate",
+          "method": "POST",
+          "path": "/api/admin/template/upload",
+          "summary": "上传或覆盖主题"
+        },
+        {
+          "operationId": "createExternalNotification",
+          "method": "POST",
+          "path": "/api/webhook/message-center/notice",
+          "summary": "发送消息中心通知"
+        }
+      ]
+    },
+    {
+      "id": "blog-web",
+      "file": "blog-web.yaml",
+      "title": "ZrLog Blog Public API",
+      "version": "3.5.8-SNAPSHOT",
+      "sha256": "41b746f61154f2d4e4d85176be9e555a84f66002e03ede4d269a69022860cfe9",
+      "operations": [
+        {
+          "operationId": "listPublicArticles",
+          "method": "GET",
+          "path": "/api/article",
+          "summary": "查询公开文章列表"
+        },
+        {
+          "operationId": "getPublicArticle",
+          "method": "GET",
+          "path": "/api/article/detail",
+          "summary": "查询公开文章详情"
+        },
+        {
+          "operationId": "listPublicArticleComments",
+          "method": "GET",
+          "path": "/api/article/comment",
+          "summary": "查询文章公开评论"
+        },
+        {
+          "operationId": "getBlogBootstrapData",
+          "method": "GET",
+          "path": "/api/cache",
+          "summary": "查询博客初始化缓存"
+        },
+        {
+          "operationId": "getBlogResource",
+          "method": "GET",
+          "path": "/api/public/blogResource",
+          "summary": "查询博客前端资源配置"
+        }
+      ]
+    }
+  ]
+}

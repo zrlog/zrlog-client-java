@@ -4,6 +4,7 @@ import com.google.gson.*;
 import com.zrlog.client.*;
 
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
@@ -20,11 +21,15 @@ public final class OpenApiExecutor {
 
     public static Result execute(OpenApiDocument document, OpenApiRequest.Plan plan, URI site, Duration timeout,
                                  Supplier<ClientConfig> credentials, Consumer<JsonObject> events) {
+        return execute(HttpClients.create(timeout), document, plan, site, timeout, credentials, events);
+    }
+
+    public static Result execute(HttpClient client, OpenApiDocument document, OpenApiRequest.Plan plan, URI site, Duration timeout,
+                                 Supplier<ClientConfig> credentials, Consumer<JsonObject> events) {
         URI target = URI.create(ClientConfig.normalizeBaseUri(site).toString() + plan.path());
         Map<String, String> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         headers.putAll(plan.headers());
         authorize(document, plan.operation(), credentials, headers);
-        var client = HttpClients.create(timeout);
         HttpRequest.Builder builder = HttpRequest.newBuilder(target).timeout(timeout)
                 .header("User-Agent", BuildInfo.USER_AGENT);
         HttpClients.withMethod(builder, plan.operation().method(), plan.body());
