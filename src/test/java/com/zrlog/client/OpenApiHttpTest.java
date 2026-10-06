@@ -46,6 +46,8 @@ class OpenApiHttpTest {
         assertEquals(0, result.status, result.err);
         var request = server.takeRequest();
         assertEquals("GET", request.getMethod());
+        assertNull(request.getHeader("Content-Length"), "A bodyless OpenAPI GET must not declare an empty request body");
+        assertNull(request.getHeader("Transfer-Encoding"));
         assertEquals("/sub/api/admin/article?page=2&size=100&sort=id%2Cdesc&status=&key=%E4%B8%AD%E6%96%87%20%26%20%2B&types=guides", request.getPath());
         assertEquals("secret-token", request.getHeader("X-ZrLog-Admin-Token"));
         assertEquals(101, JsonParser.parseString(result.out).getAsJsonObject().getAsJsonObject("data").get("totalElements").getAsInt());

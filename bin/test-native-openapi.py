@@ -22,6 +22,10 @@ def main():
             pass
 
         def handle_api(self):
+            # Reproduce the deployed Worker rejecting GET requests with Content-Length: 0.
+            if self.command == "GET" and ("Content-Length" in self.headers or "Transfer-Encoding" in self.headers):
+                self.send_error(500, "Unexpected request body framing on GET")
+                return
             # Native request bodies have a known length for the cases below.
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             requests.append((self.command, self.path, dict(self.headers), body))

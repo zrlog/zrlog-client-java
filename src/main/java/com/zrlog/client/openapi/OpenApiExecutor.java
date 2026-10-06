@@ -26,7 +26,8 @@ public final class OpenApiExecutor {
         authorize(document, plan.operation(), credentials, headers);
         var client = HttpClients.create(timeout);
         HttpRequest.Builder builder = HttpRequest.newBuilder(target).timeout(timeout)
-                .header("User-Agent", BuildInfo.USER_AGENT).method(plan.operation().method(), plan.body());
+                .header("User-Agent", BuildInfo.USER_AGENT);
+        HttpClients.withMethod(builder, plan.operation().method(), plan.body());
         try { headers.forEach(builder::header); }
         catch (IllegalArgumentException e) { throw invalid("Invalid request header: " + e.getMessage()); }
         HttpRequest request = HttpClients.withProxyAuthorization(client, builder.build());

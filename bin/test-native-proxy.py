@@ -56,6 +56,9 @@ class Origin(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.record()
+        if "Content-Length" in self.headers or "Transfer-Encoding" in self.headers:
+            self.respond(code=500)
+            return
         if self.path == "/ctl/release/latest.json":
             self.respond(value={"version": "0.1.0", "url": "https://dl.zrlog.com/ctl/release/0.1.0/zrlogctl-linux-amd64",
                                 "sha256": "a" * 64, "size": 1})

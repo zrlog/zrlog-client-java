@@ -101,11 +101,11 @@ public class ZrLogHttpClient {
     }
 
     private HttpRequest.Builder request(String path, String method, HttpRequest.BodyPublisher body) {
-        return HttpRequest.newBuilder(config.resolve(path))
+        HttpRequest.Builder builder = HttpRequest.newBuilder(config.resolve(path))
                 .timeout(config.timeout())
                 .header("User-Agent", BuildInfo.USER_AGENT)
-                .header(config.bearer() ? "Authorization" : "X-ZrLog-Admin-Token", config.bearer() ? "Bearer " + config.token() : config.token())
-                .method(method, body);
+                .header(config.bearer() ? "Authorization" : "X-ZrLog-Admin-Token", config.bearer() ? "Bearer " + config.token() : config.token());
+        return HttpClients.withMethod(builder, method, body);
     }
 
     private static void checkStatus(int status, String method, String path) {

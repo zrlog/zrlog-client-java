@@ -12,6 +12,7 @@ import java.net.URI;
 import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ZrLogHttpClientTest {
@@ -41,6 +42,8 @@ class ZrLogHttpClientTest {
         assertEquals("/sub/api/admin/test", request.getPath());
         assertEquals("zrlogctl/" + BuildInfo.VERSION, request.getHeader("User-Agent"));
         assertEquals("secret-token", request.getHeader("X-ZrLog-Admin-Token"));
+        assertNull(request.getHeader("Content-Length"), "A bodyless GET must not declare an empty request body");
+        assertNull(request.getHeader("Transfer-Encoding"));
         assertEquals(true, result.getAsJsonObject("data").get("ok").getAsBoolean());
     }
 

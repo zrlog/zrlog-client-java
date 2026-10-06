@@ -40,6 +40,13 @@ public final class HttpClients {
         return request;
     }
 
+    public static HttpRequest.Builder withMethod(HttpRequest.Builder builder, String method, HttpRequest.BodyPublisher body) {
+        // GET() leaves the publisher absent. method("GET", noBody()) makes the JDK
+        // send Content-Length: 0, which some Worker forwarding paths mishandle.
+        if (method.equals("GET") && body.contentLength() == 0) return builder.GET();
+        return builder.method(method, body);
+    }
+
     public static String failureDescription(HttpClient client, URI target, Throwable failure) {
         String message = failure.getMessage();
         if (message == null || message.isBlank()) message = failure.getClass().getSimpleName();
