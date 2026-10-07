@@ -108,6 +108,21 @@
           "summary": "查询博客前端资源配置"
         }
       ]
+    },
+    {
+      "id": "plugin-core",
+      "file": "plugin-core.yaml",
+      "title": "ZrLog Plugin Core API",
+      "version": "4.0.0",
+      "sha256": "f3b044619546351ff51f03e596660dd9a1f94ff15b209d55d434e906937f80e5",
+      "operations": [
+        {
+          "operationId": "uploadPlugin",
+          "method": "POST",
+          "path": "/api/admin/plugins/upload",
+          "summary": "上传并注册插件"
+        }
+      ]
     }
   ]
 }

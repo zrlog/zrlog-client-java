@@ -1,0 +1,108 @@
+openapi: 3.1.0
+info:
+  title: ZrLog Plugin Core API
+  version: 4.0.0
+  description: |-
+    插件运行时的受支持管理接口。请求通过站点后台鉴权并转发到 plugin-core；
+    文件校验、安装与插件注册由 zrlog-plugin-core 负责。路径不包含部署 context path。
+x-zrlog-id: plugin-core
+x-zrlog-display-name: 插件运行时 API
+x-zrlog-owner-repository: https://github.com/zrlog/zrlog-plugin-core
+x-zrlog-contract-repository: https://github.com/zrlog/zrlog-api
+x-zrlog-source-path: plugin-core.yaml
+x-zrlog-audience: authenticated-admin
+servers:
+  - url: "{baseUrl}"
+    variables:
+      baseUrl:
+        default: http://localhost:17080
+paths:
+  /api/admin/plugins/upload:
+    post:
+      summary: 上传并注册插件
+      operationId: uploadPlugin
+      x-zrlog-controller: com.zrlog.plugincore.server.web.controller.PluginApiController#upload
+      x-zrlog-response-kind: action
+      description: |-
+        需要 plugin.manage。后台仅转发到 plugin-core 的 POST /api/upload。
+        上传单个可执行 JAR 或原生文件，最大 64 MiB；不接收 ZIP 或目录。
+        fileName 必须与运行时查找规则一致：JVM 为 shortName.jar，原生为
+        shortName-OS-architecture.bin（Windows 使用 .exe），系统和架构必须匹配服务端。
+        同名插件默认拒绝；overwrite=true 会停止已有插件并替换文件。
+        成功前等待插件注册，后续运行遵守按需加载设置。注册失败恢复原文件与元数据，
+        插件可能需要重新启动；恢复失败返回 HTTP 500 并保留备份。
+        不自动重试写入。客户端超时不能视为服务端未完成，请先检查插件状态。
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      parameters:
+        - name: fileName
+          in: query
+          required: true
+          description: 插件安装文件名，保留系统和架构后缀
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.(jar|bin|exe)$'
+          example: travel.jar
+        - name: overwrite
+          in: query
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+            encoding:
+              file:
+                contentType: application/octet-stream
+      responses:
+        '200':
+          description: 上传注册结果；error 非零表示业务失败
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, message]
+                properties:
+                  error: {type: integer}
+                  message: {type: string}
+                  data:
+                    type: object
+                    required: [shortName, fileName, overwritten]
+                    properties:
+                      shortName: {type: string}
+                      fileName: {type: string}
+                      overwritten: {type: boolean}
+        '401':
+          description: 未登录或令牌无效
+        '403':
+          description: 缺少 plugin.manage 权限
+        '413':
+          description: 请求体超出限制
+        '500':
+          description: 文件读写、运行时或恢复失败
+        '503':
+          description: 插件运行时不可用
+components:
+  securitySchemes:
+    AccessTokenBearer:
+      type: http
+      scheme: bearer
+      description: 个人访问令牌或 resource 为站点 /api/admin 的 OAuth access token，需 plugin.manage
+    AdminTokenHeader:
+      type: apiKey
+      in: header
+      name: X-ZrLog-Admin-Token
+    AdminTokenCookie:
+      type: apiKey
+      in: cookie
+      name: admin-token

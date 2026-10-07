@@ -29,7 +29,7 @@ class OpenApiHttpTest {
         Captured catalog = run(app, "api", "sources");
         assertEquals(0, catalog.status, catalog.err);
         var sources = JsonParser.parseString(catalog.out).getAsJsonArray();
-        assertEquals(2, sources.size());
+        assertEquals(3, sources.size());
         for (var source : sources) {
             String id = source.getAsJsonObject().get("id").getAsString();
             assertEquals(source.getAsJsonObject().getAsJsonArray("operations").size(),
@@ -45,6 +45,9 @@ class OpenApiHttpTest {
         Captured blog = run(app, "api", "list", "--source", "blog-web");
         assertEquals(0, blog.status, blog.err);
         assertTrue(blog.out.contains("getPublicArticle"));
+        Captured plugins = run(app, "api", "describe", "uploadPlugin", "--source", "plugin-core");
+        assertEquals(0, plugins.status, plugins.err);
+        assertTrue(plugins.out.contains("/api/admin/plugins/upload"));
         assertEquals(0, server.getRequestCount());
     }
 

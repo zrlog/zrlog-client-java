@@ -57,6 +57,7 @@ zrlogctl logout
 | 分类列表与同步 | `taxonomy.read`、`taxonomy.manage` |
 | 上传图片或附件 | `asset.upload` |
 | 上传或覆盖模板 | `site.configure` |
+| 上传或覆盖插件 | `plugin.manage` |
 | 发送通知 | `notification.create` |
 | 保持连接、自动刷新令牌 | `offline_access` |
 
@@ -162,6 +163,13 @@ zrlogctl theme upload template-travel
 # 明确确认覆盖已有的非内置主题
 zrlogctl theme upload template-travel.zip --overwrite
 
+# 上传插件（需 plugin.manage 权限），JVM 部署上传 JAR
+zrlogctl plugin upload travel.jar
+zrlogctl plugin upload travel.jar --overwrite
+
+# 原生部署上传与服务端系统、架构匹配的文件
+zrlogctl plugin upload travel-Linux-amd64.bin --overwrite
+
 # 适合 AI 和脚本的 JSON 输出；全局参数也可以放在子命令之后
 zrlogctl article list --output json
 ```
@@ -175,6 +183,11 @@ zrlogctl article list --output json
 `static-error`、`publish-error`、`sse-error` 会导致失败退出；连接中断、超时或缺少 `publish-complete` 也不会报告发布成功。此时文章可能已经保存，客户端不会自动重试写入，应先检查远端文章状态。发布检查的 `publish-check-error` 是提示，仍以最终发布完成事件为准。兼容旧服务端的普通 JSON 响应时，会提示无法确认静态同步完成，并继续校验已保存的文章。
 
 保存响应超时后的自动 GET 对账需求作为[独立问题](docs/article-save-timeout.md)跟踪。
+
+插件上传由 `zrlog-plugin-core` 校验、安装并完成注册，文件最大 64 MiB，暂不支持 ZIP 或目录。
+覆盖会停止已有插件；注册失败恢复原文件与元数据，原插件可能需要重新启动。运行方式沿用按需加载设置。
+已有授权没有 `plugin.manage` 时，重新执行 `zrlogctl login --permissions plugin.manage` 授权；这会替换默认申请范围。
+通用调用可使用 `zrlogctl api --source plugin-core call uploadPlugin --query fileName=travel.jar --file file=travel.jar`。
 
 完整 front matter 约定见 [docs/content-format.md](docs/content-format.md)，示例位于 [examples](examples)。AI 写作风格、语料审阅和发布证据属于具体内容工程，不由 `zrlogctl` 强制。
 

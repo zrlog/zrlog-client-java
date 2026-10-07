@@ -30,7 +30,7 @@ import java.util.concurrent.Callable;
 @Command(name = "zrlogctl", mixinStandardHelpOptions = true, versionProvider = BuildInfo.class,
         description = "Non-graphical ZrLog administration for automation and AI agents.",
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class,
-                Application.MediaGroup.class, Application.ThemeGroup.class,
+                Application.MediaGroup.class, Application.ThemeGroup.class, Application.PluginGroup.class,
                 Application.ContentGroup.class, Application.UpdateGroup.class,
                 Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
                 OpenApiCommands.class})
@@ -224,10 +224,10 @@ public class Application implements Runnable {
     static class Login implements Callable<Integer> {
         private static final List<String> DEFAULT_PERMISSIONS = List.of(
                 "article.read", "article.create", "article.update", "article.publish",
-                "taxonomy.read", "taxonomy.manage", "asset.upload", "site.configure", "notification.create");
+                "taxonomy.read", "taxonomy.manage", "asset.upload", "site.configure", "plugin.manage", "notification.create");
         @ParentCommand Application root;
         @Option(names = "--no-browser", description = "Print the authorization URL without opening a browser") boolean noBrowser;
-        @Option(names = "--permissions", split = ",", description = "Request only these account action IDs (defaults to article publishing, categories, uploads, themes, and notifications)") List<String> permissions;
+        @Option(names = "--permissions", split = ",", description = "Request only these account action IDs (defaults to article publishing, categories, uploads, themes, plugins, and notifications)") List<String> permissions;
         @Option(names = "--inherit-permissions", description = "Allow choosing inherited account permissions in the browser instead of the default CLI permissions") boolean inheritPermissions;
         @Option(names = "--wait", defaultValue = "300", description = "Seconds to wait for browser authorization") int wait;
         public Integer call() {
@@ -512,6 +512,25 @@ public class Application implements Runnable {
             Theme theme = group.root.api().uploadTheme(file, overwrite);
             group.root.emit(theme, "uploaded theme " + theme.shortTemplate()
                     + (theme.overwritten() ? " (overwritten)" : ""));
+            return 0;
+        }
+    }
+
+    @Command(name = "plugin", description = "Manage ZrLog plugins", subcommands = PluginUpload.class)
+    static class PluginGroup implements Runnable {
+        @ParentCommand Application root;
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+
+    @Command(name = "upload", description = "Upload and register a JAR or native plugin")
+    static class PluginUpload implements Callable<Integer> {
+        @ParentCommand PluginGroup group;
+        @Parameters(index = "0", description = "Plugin file (.jar, .bin, or .exe) matching the server runtime") Path file;
+        @Option(names = "--overwrite", description = "Replace and restart an existing plugin") boolean overwrite;
+        public Integer call() {
+            var plugin = group.root.api().uploadPlugin(file, overwrite);
+            group.root.emit(plugin, "uploaded plugin " + plugin.shortName()
+                    + (plugin.overwritten() ? " (overwritten)" : ""));
             return 0;
         }
     }

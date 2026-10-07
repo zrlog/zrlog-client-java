@@ -181,6 +181,36 @@ public class ZrLogApi {
 
     public Theme uploadTheme(Path file) { return uploadTheme(file, false); }
 
+    public com.zrlog.client.model.Plugin uploadPlugin(Path file, boolean overwrite) {
+        if (file == null || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            throw new ApiException("Plugin source must be a regular file, not a symbolic link", 3, null, null);
+        }
+        String fileName = file.getFileName().toString();
+        if (!fileName.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.(jar|bin|exe)")) {
+            throw new ApiException("Plugin source must be a .jar, .bin, or .exe file with a valid plugin name", 3, null, null);
+        }
+        try {
+            long size = Files.size(file);
+            if (size == 0 || size > 64L * 1024 * 1024) {
+                throw new ApiException("Plugin file must be nonempty and at most 64 MiB", 3, null, null);
+            }
+            var pluginHttp = new ZrLogOpenApiClient(http.config(),
+                    com.zrlog.client.openapi.OpenApiDocument.load(null, "plugin-core"));
+            JsonObject result = data(pluginHttp.upload("uploadPlugin", Map.of("fileName", fileName,
+                    "overwrite", Boolean.toString(overwrite)), "file", file));
+            String shortName = JsonSupport.string(result, "shortName", "");
+            String uploadedFile = JsonSupport.string(result, "fileName", "");
+            if (shortName.isBlank() || !fileName.equals(uploadedFile) || !result.has("overwritten")) {
+                throw protocol("Plugin upload response is missing or has invalid data.shortName, data.fileName, or data.overwritten");
+            }
+            return new com.zrlog.client.model.Plugin(shortName, uploadedFile, JsonSupport.bool(result, "overwritten"));
+        } catch (IOException e) {
+            throw new ApiException("Unable to read plugin file: " + e.getMessage(), 3, e);
+        }
+    }
+
+    public com.zrlog.client.model.Plugin uploadPlugin(Path file) { return uploadPlugin(file, false); }
+
     private static String zipName(String fileName) {
         String lowerName = fileName.toLowerCase(Locale.ROOT);
         if (!lowerName.endsWith(".zip") || fileName.length() == 4) {

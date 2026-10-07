@@ -39,7 +39,7 @@ JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用
 
 ## 已覆盖的 CLI 业务接口
 
-内置后台契约已覆盖 `ZrLogApi` 使用的全部 10 个业务操作。OAuth 登录与刷新仍使用现有授权协议，不通过业务 OpenAPI 调用。
+内置后台契约覆盖 10 个业务操作，插件运行时契约另提供 `uploadPlugin`（`POST /api/admin/plugins/upload`）。使用 `api --source plugin-core describe uploadPlugin` 查看上传参数。OAuth 登录与刷新仍使用现有授权协议，不通过业务 OpenAPI 调用。
 
 | operationId | HTTP 请求 |
 | --- | --- |
@@ -56,7 +56,7 @@ JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用
 
 `api call listArticles` 每次只取一页。省略状态、每页条数或排序时，服务端使用账号的后台偏好；上面的示例显式传空 `status` 来查询全部可见状态。需要全部文章时，按返回的 `data.totalElements` 逐页读取并校验重复和数量变化。`getArticle` 返回 `data.article` 的完整快照；更新前提取可写字段以及 `logId`、`version`，不要回传只读字段或 UI 元数据。
 
-`article`、`category`、`media`、`theme` 和通知便捷命令已按 operationId 调用同一个 OpenAPI 执行器，不再自行定义 HTTP 路径、方法或拼接查询参数。便捷命令保留自动分页、本地文件、文章版本和发布完成校验；`article list` 显式传空 `status`，避免后台筛选偏好漏掉文章。
+`article`、`category`、`media`、`theme`、`plugin` 和通知便捷命令已按 operationId 调用同一个 OpenAPI 执行器，不再自行定义 HTTP 路径、方法或拼接查询参数。便捷命令保留自动分页、本地文件、文章版本和发布完成校验；`article list` 显式传空 `status`，避免后台筛选偏好漏掉文章。
 
 分类写入默认使用 JSON 并检查 `error`。如果选择 SSE，`response` 事件携带写入结果，`refresh-complete` 确认缓存刷新完成；通用调用器只按契约识别流完成/失败事件，事件 data 保留为字符串，调用方还需检查其中的业务 `error`。断流或刷新失败时写入可能已经完成，不能自动重试。
 
@@ -97,7 +97,7 @@ responses:
 
 ## 契约来源与维护
 
-`src/main/resources/openapi/admin-web.yaml` 与 `blog-web.yaml` 是离线发布快照。统一来源为 `zrlog-api/admin-web.yaml`、`zrlog-api/blog-web.yaml` 与生成的 `zrlog-api/index.json`，不在客户端副本中独立修改接口。`api sources` 从该索引列出契约；加载时检查 SHA-256，新增契约无需修改 Java 中的来源白名单。服务端仓库中的 `docs/api/openapi.yaml` 也由统一来源生成。
+`src/main/resources/openapi/` 中的 `admin-web.yaml`、`blog-web.yaml` 和 `plugin-core.yaml` 是离线发布快照。统一来源为 `zrlog-api` 中的同名契约与生成的 `index.json`，不在客户端副本中独立修改接口。`api sources` 从该索引列出契约；加载时检查 SHA-256，新增契约无需修改 Java 中的来源白名单。服务端仓库中的 `docs/api/openapi.yaml` 也由统一来源生成。
 
 在包含这些仓库的工作区中同步：
 

@@ -18,6 +18,12 @@
     "allDeclaredMethods": true
   },
   {
+    "name": "com.zrlog.client.model.Plugin",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
     "name": "com.zrlog.client.content.ContentService$Result",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,

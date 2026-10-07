@@ -303,7 +303,7 @@ class ApplicationTest {
         try (MockWebServer server = new MockWebServer()) {
             server.start();
             String defaults = "article.read article.create article.update article.publish taxonomy.read "
-                    + "taxonomy.manage asset.upload site.configure notification.create offline_access";
+                    + "taxonomy.manage asset.upload site.configure plugin.manage notification.create offline_access";
             for (String mode : List.of("default", "custom", "inherit")) {
                 Application app = isolatedApplication(mode);
                 String issuer = server.url("/sub").toString();
