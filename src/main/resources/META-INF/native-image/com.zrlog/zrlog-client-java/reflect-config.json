@@ -12,6 +12,12 @@
     "allDeclaredMethods": true
   },
   {
+    "name": "com.zrlog.client.model.Navigation",
+    "allDeclaredConstructors": true,
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
     "name": "com.zrlog.client.model.Theme",
     "allDeclaredConstructors": true,
     "allDeclaredFields": true,

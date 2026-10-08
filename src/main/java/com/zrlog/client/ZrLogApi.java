@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.zrlog.client.content.ArticleSource;
 import com.zrlog.client.model.Article;
 import com.zrlog.client.model.Category;
+import com.zrlog.client.model.Navigation;
 import com.zrlog.client.model.Theme;
 
 import java.io.IOException;
@@ -64,6 +65,56 @@ public class ZrLogApi {
         http.call("updateCategory", Map.of(), JsonSupport.object(Map.of(
                 "id", id, "typeName", category.get("name"), "alias", category.get("alias"),
                 "remark", category.get("remark"))));
+    }
+
+    public List<Navigation> listNavigation() {
+        JsonArray rows = data(http.call("listNavigation", Map.of(), null)).getAsJsonArray("rows");
+        if (rows == null) throw protocol("Navigation response has no data.rows");
+        List<Navigation> result = new ArrayList<>();
+        Set<Long> ids = new HashSet<>();
+        for (JsonElement element : rows) {
+            JsonObject value = element.getAsJsonObject();
+            long id = JsonSupport.number(value, "id");
+            String name = JsonSupport.string(value, "navName", null);
+            String url = JsonSupport.string(value, "url", null);
+            if (id <= 0 || !ids.add(id) || name == null || url == null) {
+                throw protocol("Navigation response has an invalid or repeated ID, or missing navName/url");
+            }
+            Long sort = value.has("sort") && !value.get("sort").isJsonNull() ? JsonSupport.number(value, "sort") : null;
+            result.add(new Navigation(id, name, url, JsonSupport.string(value, "icon", null), sort));
+        }
+        return result;
+    }
+
+    public void createNavigation(String name, String url, String icon, Long sort) {
+        http.call("createNavigation", Map.of(), navigationBody(name, url, icon, sort));
+    }
+
+    public void updateNavigation(long id, String name, String url, String icon, Long sort) {
+        if (id <= 0) throw new ApiException("Navigation ID must be positive", 3, null, null);
+        if (name == null && url == null && icon == null && sort == null) {
+            throw new ApiException("Specify at least one of --name, --url, --icon, or --sort", 3, null, null);
+        }
+        Navigation current = listNavigation().stream().filter(item -> item.id() == id).findFirst()
+                .orElseThrow(() -> new ApiException("Navigation ID " + id + " not found", 6, null, null));
+        JsonObject body = navigationBody(name == null ? current.name() : name,
+                url == null ? current.url() : url, icon == null ? current.icon() : icon,
+                sort == null ? current.sort() : sort);
+        body.addProperty("id", id);
+        http.call("updateNavigation", Map.of(), body);
+    }
+
+    public void deleteNavigation(List<Long> ids) {
+        http.call("deleteNavigation", Map.of("id", JsonSupport.GSON.toJson(ids)), null);
+    }
+
+    private static JsonObject navigationBody(String name, String url, String icon, Long sort) {
+        JsonObject body = new JsonObject();
+        body.addProperty("navName", name);
+        body.addProperty("url", url);
+        body.addProperty("icon", icon);
+        body.addProperty("sort", sort);
+        return body;
     }
 
     public List<Article> listArticles() {

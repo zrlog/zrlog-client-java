@@ -6,7 +6,7 @@
       "file": "admin-web.yaml",
       "title": "ZrLog Admin Web API",
       "version": "4.0.0",
-      "sha256": "96a3b38fb7d9923a6a4be24a1fb62a7e229e4a32568f2c18d73f86354de4ce3b",
+      "sha256": "9969d0ac7cc464268d3df906f51908c5e3a717f13321054f14e881bba8e74762",
       "operations": [
         {
           "operationId": "listArticles",
@@ -37,6 +37,30 @@
           "method": "POST",
           "path": "/api/admin/type/update",
           "summary": "全量更新文章分类"
+        },
+        {
+          "operationId": "listNavigation",
+          "method": "GET",
+          "path": "/api/admin/nav",
+          "summary": "查询全部博客导航"
+        },
+        {
+          "operationId": "createNavigation",
+          "method": "POST",
+          "path": "/api/admin/nav/add",
+          "summary": "创建博客导航"
+        },
+        {
+          "operationId": "updateNavigation",
+          "method": "POST",
+          "path": "/api/admin/nav/update",
+          "summary": "全量更新博客导航"
+        },
+        {
+          "operationId": "deleteNavigation",
+          "method": "POST",
+          "path": "/api/admin/nav/delete",
+          "summary": "删除博客导航"
         },
         {
           "operationId": "createArticle",

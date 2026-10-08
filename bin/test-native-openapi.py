@@ -44,6 +44,10 @@ def main():
                     payload["data"] = {"shortTemplate": "native-theme", "name": "Native", "overwritten": False}
                 elif self.path == "/sub/api/admin/article-type":
                     payload["data"] = {"rows": []}
+                elif self.path == "/sub/api/admin/nav":
+                    payload["data"] = {"rows": [{"id": 7, "navName": "Archive", "url": "/archive", "icon": "book", "sort": 5}]}
+                elif self.path.startswith("/sub/api/admin/nav/delete"):
+                    payload["data"] = {"delete": True}
                 data = json.dumps(payload).encode()
                 content_type = "application/json"
             self.send_header("Content-Type", content_type)
@@ -74,8 +78,8 @@ def main():
                 return result
 
             sources = json.loads(run("api", "sources").stdout)
-            assert {source["id"] for source in sources} == {"admin-web", "blog-web"}
-            assert len(json.loads(run("api", "list").stdout)) == 10
+            assert {source["id"] for source in sources} == {"admin-web", "blog-web", "plugin-core"}
+            assert len(json.loads(run("api", "list").stdout)) == 14
             assert len(json.loads(run("api", "list", "--source", "blog-web").stdout)) == 5
             article = {"title": "Native draft", "typeId": 1, "canComment": True, "privacy": False,
                        "recommended": False, "rubbish": True, "markdown": None}
@@ -145,7 +149,18 @@ def main():
             assert b'filename="native-theme.zip"' in requests[-1][3]
             assert b"Content-Type: application/zip" in requests[-1][3]
             assert len(requests) == 8, requests
-            print("Native OpenAPI checks passed: catalog, runtime operations, schemas, auth, SSE, category/media/theme commands")
+            navigation = json.loads(run("--token", token, "nav", "list").stdout)
+            assert navigation == [{"id": 7, "name": "Archive", "url": "/archive", "icon": "book", "sort": 5}]
+            run("--token", token, "nav", "create", "--name", "Archive", "--url", "/archive")
+            assert json.loads(requests[-1][3]) == {"navName": "Archive", "url": "/archive", "icon": "", "sort": 0}
+            run("--token", token, "nav", "update", "7", "--name", "Archives")
+            assert requests[-1][1] == "/sub/api/admin/nav/update"
+            assert json.loads(requests[-1][3]) == {"id": 7, "navName": "Archives", "url": "/archive", "icon": "book", "sort": 5}
+            run("--token", token, "nav", "delete", "7", "8")
+            assert requests[-1][1] == "/sub/api/admin/nav/delete?id=7,8"
+            run("--token", token, "nav", "delete", "0", status=3)
+            assert len(requests) == 13, requests
+            print("Native OpenAPI checks passed: catalog, runtime operations, schemas, auth, SSE, category/media/theme/nav commands")
     finally:
         server.shutdown()
         server.server_close()

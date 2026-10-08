@@ -37,7 +37,12 @@ class OpenApiHttpTest {
         }
         Captured listed = run(app, "api", "list");
         assertEquals(0, listed.status, listed.err);
-        assertEquals(10, JsonParser.parseString(listed.out).getAsJsonArray().size());
+        assertEquals(14, JsonParser.parseString(listed.out).getAsJsonArray().size());
+        for (String operation : List.of("listNavigation", "createNavigation", "updateNavigation", "deleteNavigation")) {
+            Captured navigation = run(app, "api", "describe", operation);
+            assertEquals(0, navigation.status, navigation.err);
+            assertTrue(navigation.out.contains("site.configure"));
+        }
         Captured described = run(app, "api", "describe", "uploadAttachment");
         assertEquals(0, described.status, described.err);
         assertTrue(described.out.contains("multipart/form-data"));
@@ -131,6 +136,116 @@ class OpenApiHttpTest {
             if (result.status == 0) assertEquals("refresh-complete", JsonParser.parseString(result.out).getAsJsonObject().get("completionEvent").getAsString());
         }
         assertEquals(3, server.getRequestCount());
+    }
+
+    @Test void managesNavigationThroughBundledContractWithBearerAndContextPath() throws Exception {
+        Application app = application();
+        app.tokenValue = "zrpat_" + "a".repeat(43);
+        String row = "{\"id\":7,\"navName\":\"归档\",\"url\":\"/archive\",\"jumpUrl\":\"/archive\",\"icon\":null,\"sort\":1}";
+        server.enqueue(json("{\"error\":0,\"message\":\"\",\"data\":{\"rows\":[" + row + "]}}"));
+        Captured result = run(app, "api", "call", "listNavigation");
+        assertEquals(0, result.status, result.err);
+        assertEquals(JsonParser.parseString(row), JsonParser.parseString(result.out).getAsJsonObject()
+                .getAsJsonObject("data").getAsJsonArray("rows").get(0));
+        var request = server.takeRequest();
+        assertEquals("GET", request.getMethod());
+        assertEquals("/sub/api/admin/nav", request.getPath());
+        assertNull(request.getHeader("Content-Length"));
+        assertEquals("Bearer " + app.tokenValue, request.getHeader("Authorization"));
+        assertNull(request.getHeader("X-ZrLog-Admin-Token"));
+
+        String create = "{\"navName\":\"归档\",\"url\":\"/archive?tag=中文&sort=asc\",\"icon\":\"\",\"sort\":1}";
+        String update = "{\"id\":7,\"navName\":\"文章归档\",\"url\":\"/archive\",\"icon\":null,\"sort\":2}";
+        for (String operation : List.of("createNavigation", "updateNavigation")) {
+            String body = operation.equals("createNavigation") ? create : update;
+            server.enqueue(json("{\"error\":0,\"message\":\"更新成功\"}"));
+            result = run(app, "api", "call", operation, "--body", body);
+            assertEquals(0, result.status, result.err);
+            assertFalse(JsonParser.parseString(result.out).getAsJsonObject().has("id"));
+            request = server.takeRequest();
+            assertEquals("POST", request.getMethod());
+            assertEquals("/sub/api/admin/nav/" + (operation.equals("createNavigation") ? "add" : "update"), request.getPath());
+            assertEquals("application/json", request.getHeader("Accept"));
+            assertEquals("Bearer " + app.tokenValue, request.getHeader("Authorization"));
+            assertEquals(JsonParser.parseString(body), JsonParser.parseString(request.getBody().readUtf8()));
+        }
+        for (String ids : List.of("[7]", "[7,8,7]")) {
+            server.enqueue(json("{\"error\":0,\"message\":\"删除成功\",\"data\":{\"delete\":true}}"));
+            result = run(app, "api", "call", "deleteNavigation", "--query", "id=" + ids);
+            assertEquals(0, result.status, result.err);
+            assertTrue(JsonParser.parseString(result.out).getAsJsonObject().getAsJsonObject("data").get("delete").getAsBoolean());
+            request = server.takeRequest();
+            assertEquals("POST", request.getMethod());
+            assertEquals("/sub/api/admin/nav/delete?id=" + ids.substring(1, ids.length() - 1), request.getPath());
+            assertEquals("Bearer " + app.tokenValue, request.getHeader("Authorization"));
+            assertEquals(0, request.getBodySize());
+        }
+        assertEquals(5, server.getRequestCount());
+    }
+
+    @Test void validatesNavigationParametersAndPreviewsWithoutCredentialsOrNetwork() {
+        Application app = application(); app.site = null; app.tokenValue = null;
+        for (String body : List.of("{}", "{\"navName\":\"归档\"}", "{\"navName\":\" \",\"url\":\"/archive\"}",
+                "{\"navName\":\"归档\",\"url\":\" \"}", "{\"navName\":\"归档\",\"url\":\"/archive\",\"sort\":1.5}",
+                "{\"navName\":\"归档\",\"url\":\"/archive\",\"id\":7}")) {
+            Captured result = run(app, "api", "call", "createNavigation", "--body", body, "--dry-run");
+            assertEquals(3, result.status, result.err);
+        }
+        String body = "{\"navName\":\"归档\",\"url\":\"/archive\"}";
+        assertEquals(0, run(app, "api", "call", "createNavigation", "--body", body, "--dry-run").status);
+        assertEquals(3, run(app, "api", "call", "updateNavigation", "--body", body, "--dry-run").status);
+        assertEquals(3, run(app, "api", "call", "updateNavigation", "--body", body.replace("{", "{\"id\":0,"), "--dry-run").status);
+        assertEquals(0, run(app, "api", "call", "updateNavigation", "--body", body.replace("{", "{\"id\":7,"), "--dry-run").status);
+        assertEquals(3, run(app, "api", "call", "deleteNavigation", "--dry-run").status);
+        for (String ids : List.of("[]", "[0]", "[-1]", "[1.5]", "[2147483648]", "[\"7\"]", "[null]", "7,8")) {
+            Captured result = run(app, "api", "call", "deleteNavigation", "--query", "id=" + ids, "--dry-run");
+            assertEquals(3, result.status, result.err);
+        }
+        Captured result = run(app, "api", "call", "deleteNavigation", "--query", "id=[7,8]", "--dry-run");
+        assertEquals(0, result.status, result.err);
+        assertEquals("/api/admin/nav/delete?id=7,8", JsonParser.parseString(result.out).getAsJsonObject().get("path").getAsString());
+        assertEquals(3, run(app, "api", "call", "listNavigation", "--query", "id=7", "--dry-run").status);
+        assertEquals(0, server.getRequestCount());
+    }
+
+    @Test void reportsNavigationPermissionAndMissingRecordErrorsWithoutRetrying() throws Exception {
+        List<String[]> commands = List.of(
+                new String[]{"api", "call", "listNavigation"},
+                new String[]{"api", "call", "createNavigation", "--body", "{\"navName\":\"归档\",\"url\":\"/archive\"}"},
+                new String[]{"api", "call", "updateNavigation", "--body", "{\"id\":7,\"navName\":\"归档\",\"url\":\"/archive\"}"},
+                new String[]{"api", "call", "deleteNavigation", "--query", "id=[7]"});
+        for (String[] command : commands) {
+            server.enqueue(json("{\"error\":9016,\"message\":\"Permission denied\"}"));
+            Captured result = run(application(), command);
+            assertEquals(4, result.status, result.err);
+            assertEquals(9016, JsonParser.parseString(result.err).getAsJsonObject().get("apiError").getAsInt());
+            server.takeRequest();
+        }
+        for (String[] command : commands.subList(2, 4)) {
+            server.enqueue(json("{\"error\":1,\"message\":\"Record missing\",\"data\":{\"delete\":false}}"));
+            Captured result = run(application(), command);
+            assertEquals(6, result.status, result.err);
+            assertEquals(1, JsonParser.parseString(result.err).getAsJsonObject().get("apiError").getAsInt());
+            server.takeRequest();
+        }
+        assertEquals(6, server.getRequestCount());
+    }
+
+    @Test void navigationRefreshStreamsRequireTheDeclaredCompletionEvent() throws Exception {
+        for (String operation : List.of("createNavigation", "updateNavigation", "deleteNavigation")) {
+            List<String> command = new ArrayList<>(List.of("api", "call", operation, "--accept", "text/event-stream"));
+            if (operation.equals("deleteNavigation")) command.addAll(List.of("--query", "id=[7]"));
+            else command.addAll(List.of("--body", (operation.equals("updateNavigation") ? "{\"id\":7," : "{")
+                    + "\"navName\":\"归档\",\"url\":\"/archive\"}"));
+            for (String ending : List.of("event: refresh-complete\ndata: {\"error\":0}\n\n", "", "event: static-error\ndata: {}\n\n")) {
+                server.enqueue(sse("event: response\ndata: {\"error\":0}\n\n" + ending));
+                Captured result = run(application(), command.toArray(String[]::new));
+                assertEquals(ending.isEmpty() ? 5 : ending.contains("static-error") ? 6 : 0, result.status, result.err);
+                assertEquals("text/event-stream", server.takeRequest().getHeader("Accept"));
+                if (result.status == 0) assertEquals("refresh-complete", JsonParser.parseString(result.out).getAsJsonObject().get("completionEvent").getAsString());
+            }
+        }
+        assertEquals(9, server.getRequestCount());
     }
 
     @Test void newYamlOperationRunsWithoutJavaChangesAndNeverUsesSpecServerOrCredentialsForPublicCalls() throws Exception {

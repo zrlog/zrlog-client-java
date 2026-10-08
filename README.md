@@ -56,12 +56,12 @@ zrlogctl logout
 | 读取文章、创建/更新草稿、发布、修订或撤回已发布文章 | `article.read`、`article.create`、`article.update`、`article.publish`、`taxonomy.read` |
 | 分类列表与同步 | `taxonomy.read`、`taxonomy.manage` |
 | 上传图片或附件 | `asset.upload` |
-| 上传或覆盖模板 | `site.configure` |
+| 上传或覆盖模板、导航增删改查 | `site.configure` |
 | 上传或覆盖插件 | `plugin.manage` |
 | 发送通知 | `notification.create` |
 | 保持连接、自动刷新令牌 | `offline_access` |
 
-`site.configure` 是现有的站点配置权限，不仅限于模板上传；只有站长和管理员可以授予。作者可以发布自己的文章，但不能管理模板；投稿者没有发布权限。授权始终受账号当前权限和文章归属限制。
+`site.configure` 是现有的站点配置权限，涵盖模板上传和导航管理；只有站长和管理员可以授予。作者可以发布自己的文章，但不能管理模板或导航；投稿者没有发布权限。授权始终受账号当前权限和文章归属限制。
 
 可传 `--permissions article.read,taxonomy.read` 替换默认申请范围；仅发布文章可传 `--permissions article.read,article.create,article.update,article.publish,taxonomy.read,asset.upload`，仅上传模板可传 `--permissions site.configure`。如需继承账号权限，使用 `login --inherit-permissions`，并在浏览器明确选择“继承账号权限”；此选项不能与 `--permissions` 同时使用。`offline_access` 自动附加到申请中，保留“长期连接”授权后客户端自动刷新。
 
@@ -124,6 +124,8 @@ ZRLOG_PROXY_DEBUG=1 zrlogctl -Djdk.httpclient.HttpClient.log=channel article lis
 
 ## 常用命令
 
+`article/category` 等便捷命令会处理分页、本地文件和结果校验，底层与 `api call` 共用 OpenAPI。`api call` 后面传操作名（例如 `listArticles`），用于直接发送一次接口请求。参数发现见 [OpenAPI 调用说明](docs/openapi.md#便捷命令与-api-命令如何选择)，包含 Markdown 文件和完整 JSON 请求体的发布流程见 [文章发布示例](docs/publishing.md)。
+
 ```bash
 # 需要发送通知权限，站点需开启“接收外部通知”
 zrlogctl notification send --title "部署完成" --description "生产环境已更新" --key production-deploy
@@ -138,6 +140,15 @@ zrlogctl category list
 zrlogctl category sync content/categories.yml
 zrlogctl article list
 zrlogctl article get example
+
+# 导航（需 site.configure 权限，底层通过 OpenAPI 调用）
+zrlogctl nav list
+zrlogctl nav create --name "归档" --url /archive --sort 1
+# 从 nav list 取得实际 ID；更新时只传要修改的字段
+zrlogctl nav update 1 --name "文章归档"
+zrlogctl nav update 1 --icon '' --sort 2
+zrlogctl nav delete 1
+zrlogctl nav update --help
 
 # 默认创建草稿，并回读服务端渲染结果
 zrlogctl article draft content/doc/example.md
@@ -175,6 +186,8 @@ zrlogctl article list --output json
 ```
 
 `draft` 不会覆盖内容不同的草稿，也不会把已发布文章静默转为草稿。覆盖草稿或修订已发布文章需要绑定当前完整远端快照的 revision token。ZrLog 的文章 `version` 字段仍作为最终并发保护。
+
+`nav create` 的 `--name/--url` 必填，`--icon` 默认空，`--sort` 默认 0。创建响应不含 ID，用 `nav list` 读取实际 ID。`nav update ID` 至少提供一个字段，先读取现有记录再合并；`--icon ''` 清空图标，`--sort 0` 显式重置排序。服务端没有导航版本检查，并发修改可能覆盖；历史空 sort 在更新时按服务端规则变为 0。`nav delete 1 2` 或 `nav delete 1,2` 可批量删除，任一 ID 不存在则失败。`nav list --output json` 返回 `id/name/url/icon/sort`；文本输出依次为 ID、排序、名称、链接、图标。
 
 公开发布和修订已发布文章会发送 `transparentPublish=true` 并接收 SSE，实时显示文章保存、静态站同步和发布检查进度。收到 `article` 事件只表示文章已保存；客户端等待 `publish-complete` 后，再回读文章校验内容与版本，最后输出成功结果。草稿和私密文章仍使用普通 JSON 请求。
 

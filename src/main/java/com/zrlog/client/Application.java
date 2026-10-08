@@ -9,6 +9,7 @@ import com.zrlog.client.content.ContentPolicy;
 import com.zrlog.client.content.ContentService;
 import com.zrlog.client.model.Article;
 import com.zrlog.client.model.Category;
+import com.zrlog.client.model.Navigation;
 import com.zrlog.client.model.Theme;
 import com.zrlog.client.update.UpdateService;
 import picocli.CommandLine;
@@ -29,7 +30,7 @@ import java.util.concurrent.Callable;
 
 @Command(name = "zrlogctl", mixinStandardHelpOptions = true, versionProvider = BuildInfo.class,
         description = "Non-graphical ZrLog administration for automation and AI agents.",
-        subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class,
+        subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class, Application.NavigationGroup.class,
                 Application.MediaGroup.class, Application.ThemeGroup.class, Application.PluginGroup.class,
                 Application.ContentGroup.class, Application.UpdateGroup.class,
                 Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
@@ -227,7 +228,7 @@ public class Application implements Runnable {
                 "taxonomy.read", "taxonomy.manage", "asset.upload", "site.configure", "plugin.manage", "notification.create");
         @ParentCommand Application root;
         @Option(names = "--no-browser", description = "Print the authorization URL without opening a browser") boolean noBrowser;
-        @Option(names = "--permissions", split = ",", description = "Request only these account action IDs (defaults to article publishing, categories, uploads, themes, plugins, and notifications)") List<String> permissions;
+        @Option(names = "--permissions", split = ",", description = "Request only these account action IDs (defaults to article publishing, categories, navigation, uploads, themes, plugins, and notifications)") List<String> permissions;
         @Option(names = "--inherit-permissions", description = "Allow choosing inherited account permissions in the browser instead of the default CLI permissions") boolean inheritPermissions;
         @Option(names = "--wait", defaultValue = "300", description = "Seconds to wait for browser authorization") int wait;
         public Integer call() {
@@ -320,7 +321,7 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "article", description = "Manage ZrLog articles", subcommands = {
+    @Command(name = "article", mixinStandardHelpOptions = true, description = "Manage ZrLog articles", subcommands = {
             ArticleList.class, ArticleGet.class, ArticleDraft.class, ArticlePublish.class,
             ArticleVerify.class, ArticleToken.class, ArticleRevise.class, ArticleStage.class})
     static class ArticleGroup implements Runnable {
@@ -335,7 +336,7 @@ public class Application implements Runnable {
         ArticleSource source() { return ContentFiles.loadArticle(file); }
     }
 
-    @Command(name = "list", description = "List all admin-visible articles")
+    @Command(name = "list", mixinStandardHelpOptions = true, description = "List all admin-visible articles")
     static class ArticleList implements Callable<Integer> {
         @ParentCommand ArticleGroup group;
         public Integer call() {
@@ -348,7 +349,7 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "get", description = "Get an article by numeric ID or alias")
+    @Command(name = "get", mixinStandardHelpOptions = true, description = "Get an article by numeric ID or alias")
     static class ArticleGet implements Callable<Integer> {
         @ParentCommand ArticleGroup group;
         @Parameters(index = "0") String idOrAlias;
@@ -362,7 +363,7 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "draft", description = "Create or safely update a draft")
+    @Command(name = "draft", mixinStandardHelpOptions = true, description = "Create or safely update a draft")
     static class ArticleDraft extends ArticleFileCommand {
         @Option(names = "--revision-token") String token;
         public Integer call() {
@@ -372,7 +373,12 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "publish", description = "Publish a byte-equivalent managed draft")
+    @Command(name = "publish", mixinStandardHelpOptions = true,
+            description = "Publish an existing draft that matches the Markdown file, wait for completion, and verify it",
+            footer = {"Create the matching draft first: zrlogctl article draft article.md",
+                    "Publish it: zrlogctl article publish article.md --timeout 300",
+                    "Required front matter: title, alias, category (an existing category alias).",
+                    "Requires article.read, article.update, article.publish, and taxonomy.read; draft creation also requires article.create."})
     static class ArticlePublish extends ArticleFileCommand {
         public Integer call() {
             ContentService.Result result = root().contentService().publish(source());
@@ -381,7 +387,7 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "verify", description = "Verify managed fields against the remote article")
+    @Command(name = "verify", mixinStandardHelpOptions = true, description = "Verify managed fields against the remote article")
     static class ArticleVerify extends ArticleFileCommand {
         @Option(names = "--status", defaultValue = "published") String status;
         public Integer call() {
@@ -391,7 +397,7 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "revision-token", description = "Create a token bound to the current remote snapshot")
+    @Command(name = "revision-token", mixinStandardHelpOptions = true, description = "Create a token bound to the current remote snapshot")
     static class ArticleToken extends ArticleFileCommand {
         @Option(names = "--status", defaultValue = "published") String status;
         public Integer call() {
@@ -401,7 +407,7 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "revise", description = "Safely revise an existing published article")
+    @Command(name = "revise", mixinStandardHelpOptions = true, description = "Safely revise an existing published article")
     static class ArticleRevise extends ArticleFileCommand {
         @Option(names = "--revision-token", required = true) String token;
         public Integer call() {
@@ -411,7 +417,7 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "stage-revision", description = "Move a published article to a managed draft revision")
+    @Command(name = "stage-revision", mixinStandardHelpOptions = true, description = "Move a published article to a managed draft revision")
     static class ArticleStage extends ArticleFileCommand {
         @Option(names = "--revision-token", required = true) String token;
         public Integer call() {
@@ -476,6 +482,70 @@ public class Application implements Runnable {
             result.put("action", action);
             result.put("alias", alias);
             return result;
+        }
+    }
+
+    @Command(name = "nav", mixinStandardHelpOptions = true,
+            description = "Manage blog navigation through OpenAPI (requires site.configure)",
+            subcommands = {NavigationList.class, NavigationCreate.class, NavigationUpdate.class, NavigationDelete.class})
+    static class NavigationGroup implements Runnable {
+        @ParentCommand Application root;
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+
+    @Command(name = "list", mixinStandardHelpOptions = true, description = "List all navigation entries ordered by sort")
+    static class NavigationList implements Callable<Integer> {
+        @ParentCommand NavigationGroup group;
+        public Integer call() {
+            List<Navigation> entries = group.root.api().listNavigation();
+            if (group.root.output == Output.json) group.root.emit(entries, "");
+            else entries.forEach(entry -> System.out.printf("%d\t%s\t%s\t%s\t%s%n", entry.id(),
+                    entry.sort() == null ? "" : entry.sort(), entry.name(), entry.url(), entry.icon() == null ? "" : entry.icon()));
+            return 0;
+        }
+    }
+
+    @Command(name = "create", mixinStandardHelpOptions = true,
+            description = "Create a navigation entry; use 'nav list' afterward to find its ID")
+    static class NavigationCreate implements Callable<Integer> {
+        @ParentCommand NavigationGroup group;
+        @Option(names = "--name", required = true, description = "Navigation label") String name;
+        @Option(names = "--url", required = true, description = "Navigation URL, e.g. /archive or https://example.com") String url;
+        @Option(names = "--icon", defaultValue = "", description = "Icon text (default: empty)") String icon;
+        @Option(names = "--sort", defaultValue = "0", description = "Sort value, ascending (default: ${DEFAULT-VALUE})") Long sort;
+        public Integer call() {
+            group.root.api().createNavigation(name, url, icon, sort);
+            group.root.emit(Map.of("action", "created"), "created navigation; use 'nav list' to find its ID");
+            return 0;
+        }
+    }
+
+    @Command(name = "update", mixinStandardHelpOptions = true,
+            description = "Update selected fields of an existing navigation entry; omitted fields are read from the server",
+            footer = "At least one field is required. The server has no version check; concurrent edits can overwrite each other.")
+    static class NavigationUpdate implements Callable<Integer> {
+        @ParentCommand NavigationGroup group;
+        @Parameters(index = "0", description = "Navigation ID from 'nav list'") long id;
+        @Option(names = "--name", description = "New navigation label") String name;
+        @Option(names = "--url", description = "New navigation URL") String url;
+        @Option(names = "--icon", description = "New icon text; use --icon '' to clear") String icon;
+        @Option(names = "--sort", description = "New sort value, ascending") Long sort;
+        public Integer call() {
+            group.root.api().updateNavigation(id, name, url, icon, sort);
+            group.root.emit(Map.of("action", "updated", "id", id), "updated navigation " + id);
+            return 0;
+        }
+    }
+
+    @Command(name = "delete", mixinStandardHelpOptions = true,
+            description = "Delete navigation entries by ID; all IDs must exist")
+    static class NavigationDelete implements Callable<Integer> {
+        @ParentCommand NavigationGroup group;
+        @Parameters(index = "0..*", arity = "1..*", split = ",", description = "Navigation IDs, separated by spaces or commas") List<Long> ids;
+        public Integer call() {
+            group.root.api().deleteNavigation(ids);
+            group.root.emit(Map.of("action", "deleted", "ids", ids), "deleted navigation " + ids);
+            return 0;
         }
     }
 

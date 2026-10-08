@@ -26,6 +26,8 @@ tags:
     description: 文章查询、创建与全量更新
   - name: Category
     description: 文章分类查询与维护
+  - name: Navigation
+    description: 博客导航查询与维护
   - name: Upload
     description: 通用附件上传
   - name: Template
@@ -248,6 +250,153 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/CategoryWriteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/nav:
+    get:
+      tags: [Navigation]
+      summary: 查询全部博客导航
+      description: |-
+        需要 `site.configure`。一次返回全部导航，位于 `data.rows`，按 sort 升序排列，无分页或筛选参数。
+        id 为导航主键；url 是保存的链接，jumpUrl 与 url 相同。页面元数据不属于稳定数据契约。
+        按 ID 查询或更新前读取时，从此列表选择对应记录；没有单独的导航详情接口。
+      operationId: listNavigation
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.BlogNavController#index
+      x-zrlog-response-kind: page-hydration
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      responses:
+        "200":
+          description: 全部导航位于 data.rows；必须检查 error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NavigationListResponse"
+              example:
+                error: 0
+                message: ""
+                data:
+                  rows:
+                    - {id: 1, navName: 归档, url: /archive, jumpUrl: /archive, icon: "", sort: 1}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/nav/add:
+    post:
+      tags: [Navigation]
+      summary: 创建博客导航
+      description: |-
+        需要 `site.configure`。创建后仅返回 error/message，不返回新导航 ID；需要 ID 时重新调用 listNavigation。
+        名称和 URL 不保证唯一。本操作不幂等，响应丢失时应先读取导航核对，不得自动重放写入。
+        默认返回 JSON，确认导航写入结果；`Accept: text/event-stream` 可等待缓存与静态页面刷新。
+        刷新失败或断流时导航可能已写入，不能据此重试创建。
+      operationId: createNavigation
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.BlogNavController#add
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 创建导航数据库记录
+        - 刷新博客缓存并触发博客静态页面更新；普通 JSON 模式异步执行
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NavigationCreateRequest"
+            example: {navName: 归档, url: /archive, icon: "", sort: 1}
+      responses:
+        "200":
+          $ref: "#/components/responses/NavigationWriteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/nav/update:
+    post:
+      tags: [Navigation]
+      summary: 全量更新博客导航
+      description: |-
+        需要 `site.configure`。按 id 全量覆盖 navName、url、icon 和 sort，不是 PATCH。
+        icon 省略或为 null 时清空，sort 省略或为 null 时保存为 0。
+        应先从 listNavigation 读取当前记录，保留未修改字段再提交；没有 version 并发检查，后一次成功写入覆盖前一次。
+        仅返回 error/message，不返回导航对象。目标不存在时写入失败，必须检查 error。
+        默认返回 JSON；`Accept: text/event-stream` 可等待缓存与静态页面刷新。
+        刷新失败或断流时导航可能已写入，应先重新读取判断实际结果，不得自动重放。
+      operationId: updateNavigation
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.BlogNavController#update
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 覆盖指定导航的名称、链接、图标和排序值
+        - 刷新博客缓存并触发博客静态页面更新；普通 JSON 模式异步执行
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NavigationUpdateRequest"
+            example: {id: 1, navName: 文章归档, url: /archive, icon: "", sort: 2}
+      responses:
+        "200":
+          $ref: "#/components/responses/NavigationWriteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/nav/delete:
+    post:
+      tags: [Navigation]
+      summary: 删除博客导航
+      description: |-
+        需要 `site.configure`。查询参数 id 为逗号分隔的导航 ID，支持批量删除，重复 ID 会去重。
+        先检查所有 ID 均存在；任一不存在则返回业务失败且不执行删除，不可将重复删除视为成功。
+        成功返回 error=0、data.delete=true；失败仍可能使用 HTTP 200，必须检查 error。
+        默认返回 JSON；`Accept: text/event-stream` 可等待缓存与静态页面刷新。
+        刷新失败或断流时删除可能已完成，应先重新读取判断实际结果，不得自动重放。
+      operationId: deleteNavigation
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.BlogNavController#delete
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 删除指定导航数据库记录
+        - 刷新博客缓存并触发博客静态页面更新；普通 JSON 模式异步执行
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: 待删除的导航 ID；以逗号分隔序列化为一个查询参数，例如 id=1,2
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            items: {type: integer, format: int32, minimum: 1, maximum: 2147483647}
+          example: [1, 2]
+      responses:
+        "200":
+          $ref: "#/components/responses/NavigationDeleteResult"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -730,6 +879,32 @@ components:
               UTF-8 SSE。response 和 refresh-complete 的 data 为 CategoryWriteResponse，均需检查 error。
               response 仅确认业务方法已返回，refresh-complete 才确认刷新完成。
               static-error/sse-error 或缺少完成事件的断流表示刷新未确认完成，但写入可能已经成功；不得自动重试写入。
+    NavigationWriteResult:
+      description: 导航写入结果；error=0 表示业务成功，非零表示失败，无新导航 ID
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/NavigationWriteResponse"
+          example: {error: 0, message: 更新成功}
+        text/event-stream:
+          x-zrlog-stream:
+            completionEvent: refresh-complete
+            errorEvents: [static-error, sse-error]
+          schema:
+            $ref: "#/components/schemas/NavigationRefreshStream"
+    NavigationDeleteResult:
+      description: 导航删除结果；必须检查 error，删除成功时 data.delete 为 true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/NavigationDeleteResponse"
+          example: {error: 0, message: 删除成功, data: {delete: true}}
+        text/event-stream:
+          x-zrlog-stream:
+            completionEvent: refresh-complete
+            errorEvents: [static-error, sse-error]
+          schema:
+            $ref: "#/components/schemas/NavigationRefreshStream"
   securitySchemes:
     AccessTokenBearer:
       type: http
@@ -859,6 +1034,100 @@ components:
         message: {type: string}
         data: {type: "null", description: 不返回分类对象；可能省略}
       additionalProperties: true
+    NavigationListResponse:
+      oneOf:
+        - type: object
+          required: [error, message, data]
+          properties:
+            error: {type: integer, const: 0}
+            message: {type: string}
+            data:
+              type: object
+              required: [rows]
+              properties:
+                rows:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Navigation"
+              additionalProperties: true
+          additionalProperties: true
+        - $ref: "#/components/schemas/ApiErrorResponse"
+    Navigation:
+      type: object
+      required: [id, navName, url]
+      properties:
+        id: {type: integer, format: int64, minimum: 1}
+        navName: {type: string}
+        url: {type: string, format: uri-reference, description: 保存的导航链接}
+        jumpUrl: {type: string, format: uri-reference, description: 与 url 相同}
+        icon: {type: [string, "null"]}
+        sort: {type: [integer, "null"], format: int64}
+      additionalProperties: true
+    NavigationWriteFields:
+      type: object
+      required: [navName, url]
+      properties:
+        navName:
+          type: string
+          minLength: 1
+          pattern: '\S'
+          description: 导航名称，不能仅含空白；服务端移除 HTML
+        url:
+          type: string
+          format: uri-reference
+          minLength: 1
+          pattern: '\S'
+          description: |-
+            不能仅含空白；服务端去除首尾空白并校验 URI。
+            支持相对路径、协议相对 URL，以及 http、https、mailto、tel；http/https 和协议相对 URL 必须有合法 host。
+            其他协议（如 javascript、data）被拒绝。客户端 format 仅作注解，最终安全校验由服务端执行。
+        icon:
+          type: [string, "null"]
+          description: 图标文本；服务端移除 HTML，省略或为 null 时无图标
+        sort:
+          type: [integer, "null"]
+          format: int64
+          description: 按值升序排列；创建时省略或 null 保存为空，更新时省略或 null 保存为 0
+    NavigationCreateRequest:
+      allOf:
+        - $ref: "#/components/schemas/NavigationWriteFields"
+      unevaluatedProperties: false
+    NavigationUpdateRequest:
+      allOf:
+        - $ref: "#/components/schemas/NavigationWriteFields"
+        - type: object
+          required: [id]
+          properties:
+            id: {type: integer, format: int64, minimum: 1, description: 已存在的导航 ID}
+      unevaluatedProperties: false
+    NavigationWriteResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: {type: integer, minimum: 0, description: 0 表示写入成功，非零为失败}
+        message: {type: string}
+        data: {type: "null", description: 不返回导航对象；可能省略}
+      additionalProperties: true
+    NavigationDeleteResponse:
+      oneOf:
+        - type: object
+          required: [error, message, data]
+          properties:
+            error: {type: integer, const: 0}
+            message: {type: string}
+            data:
+              type: object
+              required: [delete]
+              properties:
+                delete: {type: boolean, const: true}
+          additionalProperties: true
+        - $ref: "#/components/schemas/ApiErrorResponse"
+    NavigationRefreshStream:
+      type: string
+      description: |-
+        UTF-8 SSE。response 和 refresh-complete 的 data 是对应的 NavigationWriteResponse 或 NavigationDeleteResponse，均需检查 error。
+        response 仅确认业务方法已返回，refresh-complete 才确认缓存与静态页面刷新完成。
+        static-error/sse-error 或缺少完成事件的断流表示刷新未确认完成，但业务写入可能已经成功；不得自动重试。
     ApiErrorResponse:
       type: object
       required:

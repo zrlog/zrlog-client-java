@@ -2,6 +2,30 @@
 
 `zrlogctl api` 直接加载 OpenAPI 3.1 YAML/JSON，在运行时发现接口、校验输入并构造 HTTP 请求。新增接口使用已支持的协议能力时，只需更换契约文件，无须生成 SDK、增加 Java API 方法或重新编译 CLI。
 
+## 便捷命令与 API 命令如何选择
+
+两类命令共用 OpenAPI 执行器，便捷命令在调用接口前后增加任务处理。
+
+| 任务 | 便捷命令 | 通用 API 命令 |
+| --- | --- | --- |
+| 查询文章 | `zrlogctl article list` 自动翻页，输出整理后的全部文章 | `zrlogctl api call listArticles` 查询一页，返回完整响应；自行传分页与筛选参数 |
+| 查询文章详情 | `zrlogctl article get ID或别名` 查找并提取文章 | `zrlogctl api call getArticle --query id=42` 按数字 ID 返回完整响应 |
+| 发布文章 | `zrlogctl article publish article.md` 读取文件、核对草稿、等待发布完成并回读校验 | `zrlogctl api call createArticle --body @article.json` 发送自己准备的 JSON；更新已有文章用 `updateArticle` |
+| 管理导航 | `zrlogctl nav list/create/update/delete` 使用命令选项；更新时合并未指定字段 | `zrlogctl api call listNavigation/createNavigation/updateNavigation/deleteNavigation` 直接调用接口；更新需提交完整字段 |
+
+日常维护 Markdown 内容可使用 `article` 命令；脚本需要指定接口参数、获取原始响应或调用新契约时可用 `api call`。完整发布流程与请求体见 [文章发布示例](publishing.md)。
+
+`api call` 后面必须是 **operationId**，例如 `listArticles`，不是 `/api/admin/article` 路径；也不能省略 `call` 写成 `api listArticles`。发现与验证流程：
+
+```bash
+zrlogctl api list                              # 找到操作名、HTTP 方法和路径
+zrlogctl api describe createNavigation         # 查看该操作的参数、Schema 和示例
+zrlogctl api call --help                       # 查看 --body、--query 等通用选项
+zrlogctl api call createNavigation --body '{"navName":"归档","url":"/archive","icon":"","sort":1}' --dry-run
+```
+
+`describe` 输出的 `parameters` 列出路径/查询参数及 `required`；`requestBody.content.application/json.example` 提供请求体示例；`schema.$ref` 指向同一输出中的 `components.schemas`，`required` 列出必填字段，`properties` 列出类型和说明。`allOf` 中各部分的要求同时生效，例如更新导航需要公共字段 `navName/url` 和额外的 `id`。`responses` 说明返回值及错误处理。`--help` 介绍命令选项，`describe` 介绍具体接口；`--dry-run` 校验输入且不发送请求。
+
 ## 命令
 
 ```bash
@@ -22,6 +46,10 @@ zrlogctl api call getArticle --query id=42
 zrlogctl api call listCategories
 zrlogctl api call createCategory --body '{"typeName":"指南","alias":"guides","remark":"使用指南"}'
 zrlogctl api call updateCategory --body '{"id":1,"typeName":"新指南","alias":"guides","remark":""}'
+zrlogctl api call listNavigation
+zrlogctl api call createNavigation --body '{"navName":"归档","url":"/archive","icon":"","sort":1}'
+zrlogctl api call updateNavigation --body '{"id":1,"navName":"文章归档","url":"/archive","icon":"","sort":2}'
+zrlogctl api call deleteNavigation --query 'id=[1,2]'
 zrlogctl api call createExternalNotification --body '{"title":"构建完成"}'
 zrlogctl api call uploadAttachment --query dir=guides/example --file imgFile=cover.png
 zrlogctl api call uploadTemplate --query shortTemplate=my-theme --query overwrite=false --file file=my-theme.zip
@@ -39,7 +67,7 @@ JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用
 
 ## 已覆盖的 CLI 业务接口
 
-内置后台契约覆盖 10 个业务操作，插件运行时契约另提供 `uploadPlugin`（`POST /api/admin/plugins/upload`）。使用 `api --source plugin-core describe uploadPlugin` 查看上传参数。OAuth 登录与刷新仍使用现有授权协议，不通过业务 OpenAPI 调用。
+内置后台契约覆盖 14 个业务操作，插件运行时契约另提供 `uploadPlugin`（`POST /api/admin/plugins/upload`）。使用 `api --source plugin-core describe uploadPlugin` 查看上传参数。OAuth 登录与刷新仍使用现有授权协议，不通过业务 OpenAPI 调用。
 
 | operationId | HTTP 请求 |
 | --- | --- |
@@ -50,15 +78,34 @@ JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用
 | listCategories | GET /api/admin/article-type |
 | createCategory | POST /api/admin/type/add |
 | updateCategory | POST /api/admin/type/update |
+| listNavigation | GET /api/admin/nav |
+| createNavigation | POST /api/admin/nav/add |
+| updateNavigation | POST /api/admin/nav/update |
+| deleteNavigation | POST /api/admin/nav/delete?id=1,2 |
 | uploadAttachment | POST /api/admin/upload |
 | uploadTemplate | POST /api/admin/template/upload |
 | createExternalNotification | POST /api/webhook/message-center/notice |
 
 `api call listArticles` 每次只取一页。省略状态、每页条数或排序时，服务端使用账号的后台偏好；上面的示例显式传空 `status` 来查询全部可见状态。需要全部文章时，按返回的 `data.totalElements` 逐页读取并校验重复和数量变化。`getArticle` 返回 `data.article` 的完整快照；更新前提取可写字段以及 `logId`、`version`，不要回传只读字段或 UI 元数据。
 
-`article`、`category`、`media`、`theme`、`plugin` 和通知便捷命令已按 operationId 调用同一个 OpenAPI 执行器，不再自行定义 HTTP 路径、方法或拼接查询参数。便捷命令保留自动分页、本地文件、文章版本和发布完成校验；`article list` 显式传空 `status`，避免后台筛选偏好漏掉文章。
+`article`、`category`、`nav`、`media`、`theme`、`plugin` 和通知便捷命令已按 operationId 调用同一个 OpenAPI 执行器，不再自行定义 HTTP 路径、方法或拼接查询参数。便捷命令保留自动分页、本地文件、文章版本和发布完成校验；`article list` 显式传空 `status`，避免后台筛选偏好漏掉文章。
 
 分类写入默认使用 JSON 并检查 `error`。如果选择 SSE，`response` 事件携带写入结果，`refresh-complete` 确认缓存刷新完成；通用调用器只按契约识别流完成/失败事件，事件 data 保留为字符串，调用方还需检查其中的业务 `error`。断流或刷新失败时写入可能已经完成，不能自动重试。
+
+导航增删改查均使用现有 `site.configure` 权限，默认登录已申请；若已有授权未勾选站点配置，重新执行 `zrlogctl login` 并选中该权限。只管理导航可用 `zrlogctl login --permissions site.configure`，该选项会替换默认申请范围。
+
+| 操作 | 参数 | 必填与默认行为 |
+| --- | --- | --- |
+| `listNavigation` | 无 | 返回全部 `data.rows` |
+| `createNavigation` | JSON：`navName`、`url`、`icon`、`sort` | `navName/url` 必填且非空；`icon` 可空，`sort` 为整数，可省略或 null |
+| `updateNavigation` | JSON：`id` 加全部可写字段 | `id/navName/url` 必填；省略 `icon` 会清空，省略 `sort` 会变为 0 |
+| `deleteNavigation` | 查询参数：`--query 'id=[1,2]'` | 非空的正整数 ID 数组，单个 ID 也使用数组 |
+
+`listNavigation` 一次返回全部导航（`data.rows`），按 sort 升序排列。按 ID 查询时从列表选取对应记录。创建仅返回 `error/message`，需重新读取列表取得实际 ID；名称和链接不保证唯一。更新为全量覆盖，应保留当前 `navName`、`url`、`icon`、`sort` 并只修改目标字段，再加上 `id` 提交；省略 icon 会清空，省略 sort 会变为 0，没有并发版本检查。删除的 `id` 按 JSON 数组输入，调用器编码为单个逗号分隔的查询参数；`id=[1]` 删除一项，`id=[1,2]` 批量删除。任一 ID 不存在则删除失败。写入默认返回 JSON，也支持上述 `refresh-complete` SSE；失败或断流不能自动重试。
+
+`nav` 便捷命令的参数见 `zrlogctl nav create --help`、`zrlogctl nav update --help` 和 [README 导航示例](../README.md#常用命令)。`nav update` 会读取当前记录并合并未指定字段，再调用 `updateNavigation`；该读取和写入没有并发版本保护。历史空 sort 更新后会按服务端规则变为 0。
+
+导航能力复用现有后台接口、权限和 CLI 执行器，支持这些接口的后台无需重新部署。新的 `nav` 便捷命令需要更新 CLI；已有支持 `api --spec` 的 CLI 可直接加载 `zrlog-api/admin-web.yaml` 使用通用调用，无需等待 CLI 重新发布。
 
 ## 实现与边界
 
