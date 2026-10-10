@@ -32,7 +32,7 @@ import java.util.concurrent.Callable;
         description = "Non-graphical ZrLog administration for automation and AI agents.",
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class, Application.NavigationGroup.class,
                 Application.MediaGroup.class, Application.ThemeGroup.class, Application.PluginGroup.class,
-                Application.ContentGroup.class, Application.UpdateGroup.class,
+                Application.ContentGroup.class, Application.UpdateGroup.class, Application.ProxyGroup.class,
                 Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
                 OpenApiCommands.class})
 public class Application implements Runnable {
@@ -211,14 +211,61 @@ public class Application implements Runnable {
         return new CredentialStore(configDirectory().resolve("credentials"), login.issuer());
     }
     private Path configDirectory() {
-        return Path.of(environment.getOrDefault("XDG_CONFIG_HOME",
-                Path.of(System.getProperty("user.home"), ".config").toString()), "zrlog");
+        return ProxyConfig.directory(environment);
     }
     private SiteConfig siteConfig() {
         return new SiteConfig(configDirectory());
     }
     private ProjectConfig projectConfig() {
         return new ProjectConfig(projectConfigPath);
+    }
+
+    @Command(name = "proxy", mixinStandardHelpOptions = true,
+            description = "Manage saved proxy settings (override environment and runtime proxies)",
+            subcommands = {ProxySet.class, ProxyShow.class, ProxyUnset.class})
+    static class ProxyGroup implements Runnable {
+        @ParentCommand Application root;
+        ProxyConfig config() { return new ProxyConfig(root.configDirectory()); }
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+
+    @Command(name = "set", mixinStandardHelpOptions = true,
+            description = "Save an HTTP proxy for all HTTP/HTTPS requests")
+    static class ProxySet implements Callable<Integer> {
+        @ParentCommand ProxyGroup group;
+        @Parameters(index = "0", paramLabel = "URL", description = "http://[user:password@]host:port or host:port") String url;
+        @Option(names = "--no-proxy", defaultValue = "", paramLabel = "HOSTS",
+                description = "Comma-separated direct hosts; replaces environment NO_PROXY (default: none)") String noProxy;
+        public Integer call() {
+            var settings = new ProxyConfig.Settings(url, noProxy);
+            ProxyConfig config = group.config();
+            config.save(settings);
+            group.root.emit(settings.display(), "Saved proxy " + settings.display().get("proxy") + " to " + config.path());
+            return 0;
+        }
+    }
+
+    @Command(name = "show", mixinStandardHelpOptions = true, description = "Show saved proxy settings without credentials")
+    static class ProxyShow implements Callable<Integer> {
+        @ParentCommand ProxyGroup group;
+        public Integer call() {
+            var settings = group.config().read();
+            group.root.emit(settings == null ? Map.of("configured", false) : settings.display(),
+                    settings == null ? "No saved proxy; using environment and runtime settings"
+                            : "Proxy: " + settings.display().get("proxy") + "\nNo proxy: " + settings.noProxy()
+                            + "\nCredentials: " + (settings.display().get("hasCredentials").equals(true) ? "configured" : "none"));
+            return 0;
+        }
+    }
+
+    @Command(name = "unset", mixinStandardHelpOptions = true, description = "Remove saved proxy settings and use environment/runtime defaults")
+    static class ProxyUnset implements Callable<Integer> {
+        @ParentCommand ProxyGroup group;
+        public Integer call() {
+            group.config().clear();
+            group.root.emit(Map.of("configured", false), "Saved proxy removed; using environment and runtime settings");
+            return 0;
+        }
     }
 
     @Command(name = "login", description = "Authorize zrlogctl through your browser")

@@ -23,7 +23,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
-/** Standard shell proxy variables, falling back to the runtime's proxy settings. */
+/** Saved proxy settings, then shell variables, then the runtime's proxy settings. */
 final class EnvironmentProxySelector extends ProxySelector {
     private static final List<Proxy> DIRECT = List.of(Proxy.NO_PROXY);
     private final Endpoint httpProxy;
@@ -39,9 +39,20 @@ final class EnvironmentProxySelector extends ProxySelector {
     }
 
     EnvironmentProxySelector(Map<String, String> environment, ProxySelector fallback, HostResolver resolver) {
-        httpProxy = proxy(environment, "http_proxy");
-        httpsProxy = proxy(environment, "https_proxy");
-        Setting bypass = setting(environment, "no_proxy");
+        this(environment, fallback, resolver, null);
+    }
+
+    EnvironmentProxySelector(Map<String, String> environment, ProxySelector fallback, ProxyConfig.Settings saved) {
+        this(environment, fallback, InetAddress::getAllByName, saved);
+    }
+
+    EnvironmentProxySelector(Map<String, String> environment, ProxySelector fallback, HostResolver resolver,
+                             ProxyConfig.Settings saved) {
+        // Saved settings are a complete override: even an invalid environment
+        // proxy or NO_PROXY=* must not change an explicitly configured route.
+        httpProxy = saved == null ? proxy(environment, "http_proxy") : proxy(new Setting("proxy.json:proxy", saved.proxy()));
+        httpsProxy = saved == null ? proxy(environment, "https_proxy") : httpProxy;
+        Setting bypass = saved == null ? setting(environment, "no_proxy") : new Setting("proxy.json:no_proxy", saved.noProxy());
         noProxy = bypass.value().split(",");
         noProxyVariable = bypass.name();
         this.fallback = fallback;
@@ -202,8 +213,15 @@ final class EnvironmentProxySelector extends ProxySelector {
             name = "all_proxy";
             configured = setting(environment, name);
         }
+        return configured.value().isEmpty() ? null : proxy(configured);
+    }
+
+    static void validateConfiguredProxy(String value) {
+        proxy(new Setting("proxy.json:proxy", value));
+    }
+
+    private static Endpoint proxy(Setting configured) {
         String value = configured.value();
-        if (value.isEmpty()) return null;
         try {
             URI uri = URI.create(value.contains("://") ? value : "http://" + value);
             if (!"http".equalsIgnoreCase(uri.getScheme()) || uri.getHost() == null
@@ -217,7 +235,7 @@ final class EnvironmentProxySelector extends ProxySelector {
             return new Endpoint(proxy, credentials(uri.getRawUserInfo()), configured.name());
         } catch (IllegalArgumentException e) {
             // Never include the configured value or parser exception: either may contain credentials.
-            throw new ApiException("Invalid " + name + "/" + name.toUpperCase(Locale.ROOT)
+            throw new ApiException("Invalid " + configured.name()
                     + ": use http://[user:password@]host:port without path, query, or fragment;"
                     + " credentials must not contain control characters or a colon in the username"
                     + " (SOCKS and HTTPS proxy endpoints are not supported)", 3, null, null);

@@ -23,6 +23,41 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class EnvironmentProxySelectorTest {
     @Test
+    void savedProxyOverridesAllEnvironmentAndRuntimeSettingsIncludingBypasses() throws Exception {
+        var selector = new EnvironmentProxySelector(Map.of("http_proxy", "socks5://invalid.example:1080",
+                "HTTPS_PROXY", "http://wrong.example:8888", "ALL_PROXY", "invalid", "no_proxy", "*", "NO_PROXY", "*"),
+                new ProxySelector() {
+                    @Override public List<Proxy> select(URI uri) { return fail("Saved settings must take precedence"); }
+                    @Override public void connectFailed(URI uri, SocketAddress address, IOException error) {
+                        fail("A saved proxy failure must not update runtime routes");
+                    }
+                }, host -> { throw new java.net.UnknownHostException(host); },
+                new ProxyConfig.Settings("http://user:pass@saved.example:3128", ""));
+        for (String target : List.of("http://blog.example", "https://blog.example")) {
+            URI uri = URI.create(target);
+            assertProxy(selector, target, "saved.example", 3128);
+            assertEquals("HTTP proxy saved.example:3128 (proxy.json:proxy)", selector.describe(uri));
+            assertEquals("Basic dXNlcjpwYXNz", selector.authorization(uri));
+            assertEquals("user", authenticate(selector, target, "saved.example", 3128,
+                    Authenticator.RequestorType.PROXY, "Basic").getUserName());
+            selector.connectFailed(uri, selector.select(uri).getFirst().address(), new IOException("refused"));
+            assertProxy(selector, target, "saved.example", 3128);
+        }
+    }
+
+    @Test
+    void onlySavedBypassesApplyWhenAProxyIsSavedAndDoNotSendCredentials() {
+        var selector = new EnvironmentProxySelector(Map.of("NO_PROXY", "*"), null,
+                host -> { throw new java.net.UnknownHostException(host); },
+                new ProxyConfig.Settings("http://user:pass@saved.example:3128", "localhost,.internal.example"));
+        URI direct = URI.create("https://blog.internal.example");
+        assertEquals(List.of(Proxy.NO_PROXY), selector.select(direct));
+        assertEquals("direct (proxy.json:no_proxy)", selector.describe(direct));
+        assertNull(selector.authorization(direct));
+        assertProxy(selector, "https://blog.example", "saved.example", 3128);
+    }
+
+    @Test
     void pinsAnIpv6ProxyAddressEvenWhenDnsReturnsIpv4FirstAndKeepsAuthentication() throws Exception {
         InetAddress ipv4 = InetAddress.getByAddress(new byte[]{127, 0, 0, 1});
         InetAddress ipv6 = InetAddress.getByName("::1");

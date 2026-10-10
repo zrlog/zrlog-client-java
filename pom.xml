@@ -135,8 +135,11 @@
                 <version>3.5.3</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
-                    <!-- Local HTTP tests must not inherit the developer's proxy settings.
+                    <!-- Local HTTP tests must not inherit the developer's proxy settings or saved configuration.
                          Proxy integration tests supply their own environment in child processes. -->
+                    <environmentVariables>
+                        <XDG_CONFIG_HOME>${project.build.directory}/test-config</XDG_CONFIG_HOME>
+                    </environmentVariables>
                     <excludedEnvironmentVariables>
                         <excludedEnvironmentVariable>http_proxy</excludedEnvironmentVariable>
                         <excludedEnvironmentVariable>HTTP_PROXY</excludedEnvironmentVariable>

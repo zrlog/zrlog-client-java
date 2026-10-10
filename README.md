@@ -85,7 +85,33 @@ zrlogctl --site https://blog.example.com --token-file ~/.zrlog-access-token arti
 
 ## 网络代理
 
-API、上传、OAuth 令牌交换/刷新/撤销以及更新检查和下载统一读取进程的代理环境变量：HTTP 请求使用 `http_proxy` / `HTTP_PROXY`，HTTPS 请求使用 `https_proxy` / `HTTPS_PROXY`，未设置对应协议时使用 `all_proxy` / `ALL_PROXY`。同名变量优先使用非空的小写值，空白值视为未设置。没有匹配的代理变量时，沿用 Java 运行时的默认代理设置。
+API、上传、OAuth 令牌交换/刷新/撤销以及更新检查和下载共用代理配置。优先级为：**通过命令保存的配置文件 > 进程代理环境变量 > Java 运行时默认代理设置**。
+
+```bash
+# 保存后对所有目录、站点的 HTTP/HTTPS 请求生效
+zrlogctl proxy set http://127.0.0.1:7890
+zrlogctl proxy show
+zrlogctl proxy show --output json
+
+# 可选：同时保存需要直连的地址；每次 set 都会替换原有直连列表
+zrlogctl proxy set http://127.0.0.1:7890 --no-proxy 'localhost,127.0.0.1,::1,.internal.example.com'
+
+# 删除保存的配置，恢复使用环境变量和运行时默认设置
+zrlogctl proxy unset
+```
+
+配置保存在 `$XDG_CONFIG_HOME/zrlog/proxy.json`（默认 `~/.config/zrlog/proxy.json`），命令创建的文件权限为 `0600`；不会写入项目的 `zrlog.json`。也可以直接编辑该文件：
+
+```json
+{
+  "proxy": "http://127.0.0.1:7890",
+  "no_proxy": "localhost,127.0.0.1,::1"
+}
+```
+
+`proxy` 为必填代理地址，`no_proxy` 可省略，默认为空。文件存在时只使用其中的代理和直连列表，环境变量中的代理和 `NO_PROXY` / `no_proxy` 均不会覆盖它；例如环境里有 `NO_PROXY=*` 也不会绕过保存的代理。无效文件会报告配置错误，不会静默切回环境变量；可以重新 `proxy set` 或 `proxy unset` 修复。命令输出隐藏代理用户名和密码，文件中仍保留认证所需的原始地址。
+
+没有保存配置时，HTTP 请求使用 `http_proxy` / `HTTP_PROXY`，HTTPS 请求使用 `https_proxy` / `HTTPS_PROXY`，未设置对应协议时使用 `all_proxy` / `ALL_PROXY`。同名变量优先使用非空的小写值，空白值视为未设置。没有匹配的代理变量时，沿用 Java 运行时的默认代理设置：
 
 ```bash
 export HTTP_PROXY=http://127.0.0.1:7890
@@ -101,17 +127,17 @@ zrlogctl update check
 
 支持只有 IPv6 地址的代理主机名，例如 `http://user:pass@proxy.example:3128`。直接填写 IPv6 地址时，地址需加方括号，例如 `http://user:pass@[2001:db8::1]:3128`。客户端连接代理，由代理通过 CONNECT 连接 HTTPS 目标；代理与目标可以分别使用 IPv6 和 IPv4，无需强制 IPv4。
 
-环境代理主机名同时有 IPv4 和 IPv6 地址时，客户端通过 `InetAddress.getAllByName()` 获取全部地址，优先选择 IPv6，并将已解析的地址交给 HTTP client，避免再次解析选回排在前面的 IPv4。只有 IPv4 地址时继续使用 IPv4；此策略仅作用于环境变量指定的代理，不修改 JVM 全局地址族设置。选中的代理不通会报错，不回退直连；需指定某个地址时可直接填写 IPv4 或带方括号的 IPv6 地址。
+代理主机名同时有 IPv4 和 IPv6 地址时，客户端通过 `InetAddress.getAllByName()` 获取全部地址，优先选择 IPv6，并将已解析的地址交给 HTTP client，避免再次解析选回排在前面的 IPv4。只有 IPv4 地址时继续使用 IPv4；此策略作用于配置文件或环境变量指定的代理，不修改 JVM 全局地址族设置。选中的代理不通会报错，不回退直连；需指定某个地址时可直接填写 IPv4 或带方括号的 IPv6 地址。
 
 API、OAuth 和更新请求统一使用 HTTP/1.1，兼容不支持 HTTP/2 的站点或中间链路。启动时会读取当前机器 `/etc/ssl/certs` 下的 `.pem` / `.crt` CA 文件（含符号链接和证书包），与 Java 默认可信 CA 合并到内存信任库；原生二进制同样在运行时读取，无需预先导入 JKS/PKCS12 或传入 `-Djavax.net.ssl.trustStore`。TLS 证书链、有效期和主机名仍会校验。
 
 需要自定义 PEM 来源时，可设置 `SSL_CERT_DIR`（以系统路径分隔符分隔的目录，在 Linux 上为冒号）或 `SSL_CERT_FILE`（PEM 证书包）；Java 默认 CA 仍保留。指定的路径不可读或 PEM 无效时报告配置错误，不关闭证书校验。若显式设置了 `javax.net.ssl.trustStore`，则尊重该 JSSE 配置，不再自动合并系统 PEM。
 
-`no_proxy` / `NO_PROXY` 是逗号分隔的直连列表，优先于代理和运行时默认设置。支持域名及其子域、前导 `.` / `*.`、IPv4/IPv6 地址、可选端口（IPv6 带端口时使用 `[::1]:8080`），以及表示全部直连的 `*`；不支持 CIDR 网段。代理变量只读取进程环境，不读取项目 `.env`；桌面代理工具需开启 HTTP 或混合端口并导出上述变量。通过 `sudo` 更新时，也需确保管理员进程收到这些变量。
+配置文件的 `no_proxy` 和环境变量的 `no_proxy` / `NO_PROXY` 都使用逗号分隔的直连列表；环境直连列表仅在没有保存配置时生效。支持域名及其子域、前导 `.` / `*.`、IPv4/IPv6 地址、可选端口（IPv6 带端口时使用 `[::1]:8080`），以及表示全部直连的 `*`；不支持 CIDR 网段。代理变量只读取进程环境，不读取项目 `.env`；桌面代理工具需开启 HTTP 或混合端口，再通过命令保存或导出上述变量。通过 `sudo` 更新时，读取的是管理员进程的配置目录和环境，需要为该进程设置相应配置。
 
-网络连接失败时，错误末尾会显示所选代理地址和变量名，例如 `[route: HTTP proxy 127.0.0.1:19999 (https_proxy)]`；命中直连列表时显示 `[route: direct (NO_PROXY)]`。这些信息不含代理用户名或密码。若大小写变量同时存在，仅修改大写值不会覆盖非空的小写值；HTTPS 站点需设置 `https_proxy` / `HTTPS_PROXY` 或 `all_proxy` / `ALL_PROXY`，单独设置 `HTTP_PROXY` 不会影响 HTTPS 请求。
+网络连接失败时，错误末尾会显示所选代理地址和来源，例如 `[route: HTTP proxy 127.0.0.1:19999 (proxy.json:proxy)]` 或 `[route: HTTP proxy 127.0.0.1:19999 (https_proxy)]`；命中直连列表时显示 `[route: direct (proxy.json:no_proxy)]` 或 `[route: direct (NO_PROXY)]`。这些信息不含代理用户名或密码。使用环境变量时，若大小写变量同时存在，仅修改大写值不会覆盖非空的小写值；HTTPS 站点需设置 `https_proxy` / `HTTPS_PROXY` 或 `all_proxy` / `ALL_PROXY`，单独设置 `HTTP_PROXY` 不会影响 HTTPS 请求。
 
-`route` 标签仅表示客户端选择的代理配置，不能证明 TCP 连接已到达代理。排查时应结合代理端连接日志或 `strace -f -e trace=connect,getsockopt` 查看实际 socket 目标。用不存在的端口测试时，需同时覆盖大小写代理变量并清空 `no_proxy` / `NO_PROXY`，避免其他环境配置影响结果。
+`route` 标签仅表示客户端选择的代理配置，不能证明 TCP 连接已到达代理。排查时应结合代理端连接日志或 `strace -f -e trace=connect,getsockopt` 查看实际 socket 目标。用不存在的端口测试环境变量代理时，先通过 `proxy unset` 移除保存的配置，并同时覆盖大小写代理变量、清空 `no_proxy` / `NO_PROXY`，避免其他配置影响结果。
 
 设置 `ZRLOG_PROXY_DEBUG=1`（或 `true`）后，真正调用 `ProxySelector.select(URI)` 时会向 stderr 输出 `[proxy-select]` JSON，记录目标协议/主机/端口和返回的每个代理的类型、主机、端口、解析状态与选中 IP。认证准备和错误说明的内部查询不会产生此日志；日志不含代理凭据、请求头、URL 路径或查询参数。可结合 JDK 的 `channel` 日志查看实际 `SocketChannel` 的 `remote` 地址：
 

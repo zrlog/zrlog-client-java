@@ -15,7 +15,8 @@ public final class HttpClients {
         // The JDK reads this once when its HTTP internals initialize. Allow Basic
         // CONNECT authentication by default, while honoring explicit JVM settings.
         System.getProperties().putIfAbsent("jdk.http.auth.tunneling.disabledSchemes", "");
-        var proxy = new EnvironmentProxySelector(System.getenv(), ProxySelector.getDefault());
+        var saved = new ProxyConfig(ProxyConfig.directory(System.getenv())).read();
+        var proxy = new EnvironmentProxySelector(System.getenv(), ProxySelector.getDefault(), saved);
         HttpClient.Builder builder = HttpClient.newBuilder()
                 .connectTimeout(timeout)
                 .version(HttpClient.Version.HTTP_1_1)
