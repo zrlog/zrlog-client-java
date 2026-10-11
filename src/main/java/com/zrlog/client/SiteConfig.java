@@ -11,7 +11,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Set;
 import java.util.function.UnaryOperator;
 
-/** The last successfully selected login, shared by commands in any working directory. */
+/** The last successfully selected login within the chosen configuration directory. */
 final class SiteConfig {
     private final Path directory;
 

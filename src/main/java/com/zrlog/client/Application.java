@@ -30,6 +30,7 @@ import java.util.concurrent.Callable;
 
 @Command(name = "zrlogctl", mixinStandardHelpOptions = true, versionProvider = BuildInfo.class,
         description = "Non-graphical ZrLog administration for automation and AI agents.",
+        footer = "Configuration directory: ./.zrlog (if present) > ZRLOG_CONFIG_DIR > $XDG_CONFIG_HOME/zrlog > ~/.config/zrlog.",
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class, Application.NavigationGroup.class,
                 Application.MediaGroup.class, Application.ThemeGroup.class, Application.PluginGroup.class,
                 Application.ContentGroup.class, Application.UpdateGroup.class, Application.ProxyGroup.class,

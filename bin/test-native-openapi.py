@@ -67,7 +67,7 @@ def main():
             directory = Path(temporary)
             environment = {key: value for key, value in os.environ.items()
                            if key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
-                           and key not in {"ZRLOG_ACCESS_TOKEN", "ZRLOG_ADMIN_TOKEN", "ZRLOG_SITE_URL", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
+                           and key not in {"ZRLOG_ACCESS_TOKEN", "ZRLOG_ADMIN_TOKEN", "ZRLOG_SITE_URL", "ZRLOG_CONFIG_DIR", "SSL_CERT_FILE", "SSL_CERT_DIR"}}
             environment["XDG_CONFIG_HOME"] = str(directory / "config")
             site = f"http://127.0.0.1:{server.server_port}/sub"
 

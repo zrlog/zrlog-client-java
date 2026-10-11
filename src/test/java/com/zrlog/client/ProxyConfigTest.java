@@ -80,5 +80,10 @@ class ProxyConfigTest {
         assertEquals(directory.resolve("zrlog"), ProxyConfig.directory(Map.of("XDG_CONFIG_HOME", directory.toString())));
         assertEquals(Path.of(System.getProperty("user.home"), ".config/zrlog"), ProxyConfig.directory(Map.of()));
         assertEquals(ProxyConfig.directory(Map.of()), ProxyConfig.directory(Map.of("XDG_CONFIG_HOME", " ")));
+        for (String blank : new String[]{"", " "}) {
+            assertEquals(directory.resolve("zrlog"), ProxyConfig.directory(Map.of(
+                    "ZRLOG_CONFIG_DIR", blank, "XDG_CONFIG_HOME", directory.toString())));
+            assertEquals(ProxyConfig.directory(Map.of()), ProxyConfig.directory(Map.of("ZRLOG_CONFIG_DIR", blank)));
+        }
     }
 }

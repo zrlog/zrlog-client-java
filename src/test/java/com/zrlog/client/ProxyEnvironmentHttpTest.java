@@ -19,6 +19,7 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -33,6 +34,93 @@ class ProxyEnvironmentHttpTest {
     private static final String SITE = "http://127.0.0.1:1/sub";
     private static final String CATEGORIES = "{\"error\":0,\"data\":{\"rows\":[]}}";
     @TempDir Path directory;
+
+    @ParameterizedTest
+    @ValueSource(strings = {"local", "relative", "absolute"})
+    void isolatesProxyDefaultSiteAndCredentialsInTheSelectedDirectory(String source) throws Exception {
+        Path global = directory.resolve("zrlog");
+        var globalProxy = new ProxyConfig(global);
+        var globalSettings = new ProxyConfig.Settings("http://127.0.0.1:1", "");
+        globalProxy.save(globalSettings);
+        var globalSite = new SiteConfig(global);
+        globalSite.saveDefaultSite("https://global.invalid");
+
+        Path selected = directory.resolve(source.equals("local") ? ".zrlog" : "custom config");
+        Map<String, String> environment = Map.of("ZRLOG_CONFIG_DIR",
+                source.equals("relative") ? "custom config" : selected.toString());
+        if (source.equals("local")) {
+            Files.createDirectory(selected);
+            // Even an explicitly selected global directory loses to the local directory.
+            environment = Map.of("ZRLOG_CONFIG_DIR", global.toString());
+        }
+        Result empty = run(environment, "proxy", "show", "--output", "json");
+        assertEquals(0, empty.exitCode(), empty.output());
+        assertFalse(JsonParser.parseString(empty.output()).getAsJsonObject().get("configured").getAsBoolean());
+        Result missingSite = run(environment, "category", "list");
+        assertEquals(3, missingSite.exitCode(), missingSite.output());
+        assertTrue(missingSite.output().contains("Run zrlogctl login --site"), missingSite.output());
+
+        try (MockWebServer proxy = new MockWebServer()) {
+            proxy.start(InetAddress.getByName("127.0.0.1"), 0);
+            Result set = run(environment, "proxy", "set", authenticatedUrl(proxy));
+            assertEquals(0, set.exitCode(), set.output());
+            assertTrue(Files.isRegularFile(selected.resolve("proxy.json")));
+            assertEquals(PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(selected.resolve("proxy.json")));
+            var site = new SiteConfig(selected);
+            site.saveDefaultSite(SITE);
+            var credentials = new CredentialStore(selected.resolve("credentials"), SITE);
+            credentials.update(old -> new OAuthTokens(SITE, "a".repeat(43), "r".repeat(43), 1, "taxonomy.read offline_access"));
+
+            proxy.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("""
+                    {"access_token":"%s","refresh_token":"%s","expires_in":600,"token_type":"Bearer"}
+                    """.formatted("b".repeat(43), "s".repeat(43))));
+            proxy.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody(CATEGORIES));
+            Result refresh = run(environment, "category", "list");
+            assertEquals(0, refresh.exitCode(), refresh.output());
+            RecordedRequest token = take(proxy);
+            assertEquals("POST " + SITE + "/oauth/token HTTP/1.1", token.getRequestLine());
+            assertEquals(proxyAuthorization(), token.getHeader("Proxy-Authorization"));
+            assertEquals("Bearer " + "b".repeat(43), take(proxy).getHeader("Authorization"));
+            assertEquals("s".repeat(43), credentials.update(current -> current).refreshToken());
+
+            proxy.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("{}"));
+            Result logout = run(environment, "logout");
+            assertEquals(0, logout.exitCode(), logout.output());
+            assertEquals("POST " + SITE + "/oauth/revoke HTTP/1.1", take(proxy).getRequestLine());
+            assertNull(credentials.update(current -> current));
+            assertNull(site.defaultSite());
+            Result unset = run(environment, "proxy", "unset");
+            assertEquals(0, unset.exitCode(), unset.output());
+            assertFalse(Files.exists(selected.resolve("proxy.json")));
+        }
+        assertEquals(globalSettings, globalProxy.read());
+        assertEquals("https://global.invalid", globalSite.defaultSite());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void rejectsInvalidLocalDirectoryInsteadOfWritingGlobalConfiguration(boolean symlink) throws Exception {
+        Path local = directory.resolve(".zrlog");
+        if (symlink) Files.createSymbolicLink(local, Files.createDirectory(directory.resolve("linked-config")));
+        else Files.writeString(local, "keep this file");
+        Result result = run(Map.of(), "proxy", "set", "http://127.0.0.1:7890");
+        assertEquals(3, result.exitCode(), result.output());
+        assertTrue(result.output().contains(".zrlog must be a directory"), result.output());
+        assertFalse(Files.exists(directory.resolve("zrlog")));
+        if (symlink) assertFalse(Files.exists(local.resolve("proxy.json")));
+        else assertEquals("keep this file", Files.readString(local));
+    }
+
+    @Test
+    void doesNotSearchParentDirectoriesForLocalConfiguration() throws Exception {
+        Path parentConfig = directory.resolve(".zrlog");
+        new ProxyConfig(parentConfig).save(new ProxyConfig.Settings("http://127.0.0.1:1", ""));
+        Path child = Files.createDirectory(directory.resolve("child"));
+        Result result = runInDirectory(child, List.of(), Map.of(), "proxy", "show", "--output", "json");
+        assertEquals(0, result.exitCode(), result.output());
+        assertFalse(JsonParser.parseString(result.output()).getAsJsonObject().get("configured").getAsBoolean());
+        assertFalse(Files.exists(child.resolve(".zrlog")));
+    }
 
     @Test
     void savedProxyCommandsOverrideEnvironmentAcrossProcessesAndUnsetRestoresIt() throws Exception {
@@ -368,13 +456,17 @@ class ProxyEnvironmentHttpTest {
     }
 
     private Result runWithProperties(List<String> properties, Map<String, String> environment, String... args) throws Exception {
+        return runInDirectory(directory, properties, environment, args);
+    }
+
+    private Result runInDirectory(Path workingDirectory, List<String> properties, Map<String, String> environment, String... args) throws Exception {
         List<String> command = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin/java").toString()));
         command.addAll(properties);
         command.addAll(List.of("-cp", System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")),
                 Application.class.getName(), "--timeout", "3"));
         command.addAll(List.of(args));
         Path output = Files.createTempFile(directory, "cli-", ".log");
-        ProcessBuilder builder = new ProcessBuilder(command).directory(directory.toFile())
+        ProcessBuilder builder = new ProcessBuilder(command).directory(workingDirectory.toFile())
                 .redirectErrorStream(true).redirectOutput(output.toFile());
         builder.environment().keySet().removeIf(key -> key.toLowerCase(Locale.ROOT).endsWith("_proxy")
                 || key.startsWith("ZRLOG_") || List.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS",

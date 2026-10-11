@@ -18,7 +18,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Map;
 import java.util.Set;
 
-/** User-wide proxy configuration, kept out of version-controlled project files. */
+/** Saved proxy configuration, kept out of version-controlled project files. */
 final class ProxyConfig {
     private static final Gson JSON = new GsonBuilder().setStrictness(Strictness.STRICT).create();
     private final Path directory;
@@ -26,7 +26,15 @@ final class ProxyConfig {
     ProxyConfig(Path directory) { this.directory = directory; }
 
     static Path directory(Map<String, String> environment) {
-        String configured = environment.get("XDG_CONFIG_HOME");
+        Path local = Path.of(".zrlog");
+        if (Files.exists(local, LinkOption.NOFOLLOW_LINKS)) {
+            if (!Files.isDirectory(local, LinkOption.NOFOLLOW_LINKS))
+                throw new ApiException(".zrlog must be a directory, not a file or symbolic link: " + local.toAbsolutePath(), 3, null, null);
+            return local;
+        }
+        String configured = environment.get("ZRLOG_CONFIG_DIR");
+        if (configured != null && !configured.isBlank()) return Path.of(configured);
+        configured = environment.get("XDG_CONFIG_HOME");
         Path base = configured == null || configured.isBlank()
                 ? Path.of(System.getProperty("user.home"), ".config") : Path.of(configured);
         return base.resolve("zrlog");
