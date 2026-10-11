@@ -615,7 +615,8 @@ public class Application implements Runnable {
         }
     }
 
-    @Command(name = "theme", description = "Manage ZrLog themes", subcommands = ThemeUpload.class)
+    @Command(name = "theme", mixinStandardHelpOptions = true, description = "Manage ZrLog themes",
+            subcommands = {ThemeUpload.class, ThemePackage.class})
     static class ThemeGroup implements Runnable {
         @ParentCommand Application root;
         public void run() { new CommandLine(this).usage(System.out); }
@@ -631,6 +632,27 @@ public class Application implements Runnable {
             group.root.emit(theme, "uploaded theme " + theme.shortTemplate()
                     + (theme.overwritten() ? " (overwritten)" : ""));
             return 0;
+        }
+    }
+
+    @Command(name = "package", mixinStandardHelpOptions = true,
+            description = "Package a theme directory as a ZIP without connecting to ZrLog")
+    static class ThemePackage implements Callable<Integer> {
+        @ParentCommand ThemeGroup group;
+        @Parameters(index = "0", description = "Theme directory") Path directory;
+        @Option(names = {"--file", "-o"}, paramLabel = "ZIP",
+                description = "Destination ZIP (default: <directory>.zip beside the source directory)") Path file;
+        @Option(names = "--overwrite", description = "Replace an existing ZIP file") boolean overwrite;
+        public Integer call() {
+            Path source = directory.toAbsolutePath().normalize();
+            Path destination = file == null ? source.resolveSibling(source.getFileName() + ".zip") : file;
+            try {
+                Path archive = ThemeArchive.create(directory, destination, overwrite);
+                group.root.emit(Map.of("file", archive.toString()), "packaged theme " + archive);
+                return 0;
+            } catch (IOException e) {
+                throw new ApiException("Unable to package theme: " + e.getMessage(), 3, e);
+            }
         }
     }
 

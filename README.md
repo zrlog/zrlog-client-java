@@ -226,6 +226,13 @@ zrlogctl theme upload template-travel.zip
 # 直接上传主题目录；目录名作为主题标识，客户端负责压缩
 zrlogctl theme upload template-travel
 
+# 离线打包，默认生成主题目录同级的 template-travel.zip
+zrlogctl theme package template-travel
+
+# 指定 ZIP 输出路径；重复生成时显式允许覆盖
+zrlogctl theme package template-travel --file dist/template-travel.zip
+zrlogctl theme package template-travel --file dist/template-travel.zip --overwrite
+
 # 明确确认覆盖已有的非内置主题
 zrlogctl theme upload template-travel.zip --overwrite
 
@@ -260,6 +267,8 @@ zrlogctl article list --output json
 完整 front matter 约定见 [docs/content-format.md](docs/content-format.md)，示例位于 [examples](examples)。AI 写作风格、语料审阅和发布证据属于具体内容工程，不由 `zrlogctl` 强制。
 
 主题上传支持 ZIP 文件或主题目录。ZIP 文件名或目录名会作为主题标识，必须以字母或数字开头，后续只能使用字母、数字、点、下划线和连字符，最长 128 个字符。目录模式由客户端在本地压缩，主题文件直接位于 ZIP 根目录；客户端不会跟随符号链接，并默认排除 `.git`、`.svn`、`.hg`、`.bzr`、`.idea`、`.vscode`、`.cache`、`node_modules`、`.env*`、凭据/密钥、数据库、日志和转储文件。ZIP 可以直接包含主题文件，也可以包含一个外层目录；主题包至少应包含 `template.properties` 和入口模板。`template-travel` 示例中的 `template.properties`、`index.ftl`、`page.ftl` 和 `detail.ftl` 可作为主题包结构参考。上传不会自动切换当前主题，覆盖已有主题必须显式传入 `--overwrite`。
+
+`theme package` 在本地生成 ZIP，无需站点配置、登录、Node.js 或 Python，复用目录上传的打包结构与文件过滤规则。`--file`（简写 `-o`）指定输出路径，父目录自动创建；不指定时输出到源目录同级的 `<目录名>.zip`。ZIP 文件名去掉扩展名后必须符合上述主题标识规则。输出必须位于源目录之外，已有 ZIP 仅在指定 `--overwrite` 时替换；符号链接和目录不能作为输出文件。全局 `--output json` 仍用于结果格式，返回包含 ZIP 绝对路径的 `file` 字段。主题内容的安装校验由服务端在上传时执行。
 
 ## 自更新
 

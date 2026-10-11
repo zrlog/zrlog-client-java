@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
@@ -194,8 +193,8 @@ public class ZrLogApi {
         }
         boolean directory = Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS);
         String sourceName = source.getFileName() == null ? "" : source.getFileName().toString();
-        String shortTemplate = directory ? sourceName : zipName(sourceName);
-        validateThemeName(shortTemplate);
+        String shortTemplate = directory ? sourceName : ThemeArchive.zipName(sourceName);
+        ThemeArchive.validateThemeName(shortTemplate);
         Path archive = source;
         try {
             if (directory) {
@@ -261,20 +260,6 @@ public class ZrLogApi {
     }
 
     public com.zrlog.client.model.Plugin uploadPlugin(Path file) { return uploadPlugin(file, false); }
-
-    private static String zipName(String fileName) {
-        String lowerName = fileName.toLowerCase(Locale.ROOT);
-        if (!lowerName.endsWith(".zip") || fileName.length() == 4) {
-            throw new ApiException("Theme source must be a .zip file or a theme directory", 3, null, null);
-        }
-        return fileName.substring(0, fileName.length() - 4);
-    }
-
-    private static void validateThemeName(String shortTemplate) {
-        if (!shortTemplate.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")) {
-            throw new ApiException("Theme name must contain only letters, numbers, dots, underscores, and hyphens", 3, null, null);
-        }
-    }
 
     public Article findUniqueByAlias(String alias) {
         List<Article> matches = listArticles().stream().filter(item -> alias.equals(item.alias())).toList();

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -30,21 +31,10 @@ final class ThemeArchive {
     private ThemeArchive() { }
 
     static Path create(Path source) throws IOException {
-        if (Files.isSymbolicLink(source) || !Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("Theme source must be a regular directory");
-        }
+        validateSource(source);
         Path archive = Files.createTempFile("zrlog-theme-", ".zip");
         try {
-            List<Path> files = collectFiles(source);
-            try (OutputStream output = Files.newOutputStream(archive);
-                 ZipOutputStream zip = new ZipOutputStream(output)) {
-                for (Path file : files) {
-                    String entryName = source.relativize(file).toString().replace(file.getFileSystem().getSeparator(), "/");
-                    zip.putNextEntry(new ZipEntry(entryName));
-                    Files.copy(file, zip);
-                    zip.closeEntry();
-                }
-            }
+            write(source, archive);
             return archive;
         } catch (IOException | RuntimeException e) {
             try {
@@ -53,6 +43,68 @@ final class ThemeArchive {
                 // Preserve the original packaging error.
             }
             throw e;
+        }
+    }
+
+    static Path create(Path source, Path destination, boolean overwrite) throws IOException {
+        validateSource(source);
+        Path output = destination.toAbsolutePath().normalize();
+        zipName(output.getFileName() == null ? "" : output.getFileName().toString());
+        Files.createDirectories(output.getParent());
+        output = output.getParent().toRealPath().resolve(output.getFileName());
+        if (output.startsWith(source.toRealPath())) {
+            throw new IOException("Destination ZIP must be outside the theme directory");
+        }
+        if (Files.exists(output, LinkOption.NOFOLLOW_LINKS)) {
+            if (!Files.isRegularFile(output, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("Destination must be a regular ZIP file, not a directory or symbolic link");
+            }
+            if (!overwrite) throw new IOException("Destination already exists; use --overwrite to replace it");
+        }
+        // Finish the archive beside its destination before replacing an existing package.
+        Path temporary = Files.createTempFile(output.getParent(), ".zrlog-theme-", ".zip");
+        try {
+            write(source, temporary);
+            if (overwrite) Files.move(temporary, output, StandardCopyOption.REPLACE_EXISTING);
+            else Files.move(temporary, output);
+            return output;
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    static String zipName(String fileName) {
+        String lowerName = fileName.toLowerCase(Locale.ROOT);
+        if (!lowerName.endsWith(".zip") || fileName.length() == 4) {
+            throw new ApiException("Theme package must have a .zip file name", 3, null, null);
+        }
+        String name = fileName.substring(0, fileName.length() - 4);
+        validateThemeName(name);
+        return name;
+    }
+
+    static void validateThemeName(String name) {
+        if (!name.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,127}")) {
+            throw new ApiException("Theme name must contain only letters, numbers, dots, underscores, and hyphens", 3, null, null);
+        }
+    }
+
+    private static void validateSource(Path source) throws IOException {
+        if (Files.isSymbolicLink(source) || !Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("Theme source must be a regular directory");
+        }
+    }
+
+    private static void write(Path source, Path archive) throws IOException {
+        List<Path> files = collectFiles(source);
+        try (OutputStream output = Files.newOutputStream(archive);
+             ZipOutputStream zip = new ZipOutputStream(output)) {
+            for (Path file : files) {
+                String entryName = source.relativize(file).toString().replace(file.getFileSystem().getSeparator(), "/");
+                zip.putNextEntry(new ZipEntry(entryName));
+                Files.copy(file, zip);
+                zip.closeEntry();
+            }
         }
     }
 
@@ -69,7 +121,7 @@ final class ThemeArchive {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-                if (!Files.isSymbolicLink(file) && !isSensitive(source.relativize(file))) files.add(file);
+                if (attributes.isRegularFile() && !isSensitive(source.relativize(file))) files.add(file);
                 return FileVisitResult.CONTINUE;
             }
         });
