@@ -64,7 +64,7 @@ public final class ZrLogOpenApiClient {
     }
 
     private OpenApiExecutor.Result execute(OpenApiRequest.Plan plan, Consumer<JsonObject> events) {
-        return OpenApiExecutor.execute(client, document, plan, config.baseUri(), config.timeout(), () -> config, events);
+        return OpenApiExecutor.execute(client, document, plan, config.baseUri(), config.timeout(), config.userAgent(), () -> config, events);
     }
 
     private static OpenApiRequest.Input input(Map<String, String> query, JsonElement body, List<String> files, String accept) {

@@ -35,7 +35,7 @@ zrlogctl article list
 zrlogctl logout
 ```
 
-登录成功后会在当前工作目录创建或更新 `zrlog.json`，只记录该项目的站点地址，可以提交到 Git：
+登录成功后会在当前工作目录创建或更新 `zrlog.json`，记录该项目的站点地址，保留已有的 agent 配置，可以提交到 Git：
 
 ```json
 {
@@ -43,7 +43,7 @@ zrlogctl logout
 }
 ```
 
-也可以手动创建此文件（参见 [示例](examples/zrlog.json)），然后执行 `zrlogctl login`。客户端只读取当前工作目录的 `zrlog.json` 和 `.env`，不会向父目录查找。`zrlog.json` 只接受 `site_url`，不接受 token 等其他字段；凭证由每位使用者单独登录获取，或通过不提交到 Git 的 `.env` 提供。登录不会创建或修改 `.env`，也不会将其中的令牌复制到项目配置。
+也可以手动创建此文件（参见 [示例](examples/zrlog.json)），然后执行 `zrlogctl login`。客户端只读取当前工作目录的 `zrlog.json` 和 `.env`，不会向父目录查找。`zrlog.json` 接受 `site_url` 和可选的 `agent_name`、`agent_version`，不接受 token 等其他字段；凭证由每位使用者单独登录获取，或通过不提交到 Git 的 `.env` 提供。登录不会创建或修改 `.env`，也不会将其中的令牌复制到项目配置。
 
 登录同时更新所选配置目录中的默认站点；默认使用全局配置，在没有项目配置或其他站点覆盖的目录中，仍可直接执行 `zrlogctl article list`。在其他项目中登录不会改变本项目 `zrlog.json` 记录的站点。在当前项目重新登录其他站点，会更新本项目配置和所选目录中的默认站点；普通命令临时传入 `--site` 不会改写它们。登录取消或授权失败不会改写配置，已有项目配置无效时会在授权前报错。升级前已登录的用户可重新执行一次 `login --site <URL>` 生成项目配置。
 
@@ -82,6 +82,48 @@ zrlogctl --site https://blog.example.com --token-file ~/.zrlog-access-token arti
 `--token-file` 要求权限 `0600`。`zrpat_` 令牌和浏览器 OAuth 使用 Authorization Bearer；旧后台令牌保留原 Header。`ZRLOG_ACCESS_TOKEN` 可显式传入 Bearer 凭证。`--token` 可能进入 shell 历史或进程参数，长期接入请使用登录或文件。
 
 非本机站点必须使用 HTTPS。API 和令牌交换拒绝 HTTP 重定向，避免凭证转发到其他地址。
+
+## 操作来源与 agent 配置
+
+通过 agent 执行命令时，可以声明调用者名称和可选版本。名称自由配置，不限定厂商或 agent 清单：
+
+```bash
+zrlogctl --agent-name dot --agent-version 1.2 article list
+zrlogctl --agent muse article list
+# 自定义 agent 同样支持
+ZRLOG_AGENT_NAME=my-agent ZRLOG_AGENT_VERSION=2026.10 zrlogctl article list
+```
+
+`--agent` 是 `--agent-name` 的别名。持久配置可放在当前目录的 `.env` 中，使用 `ZRLOG_AGENT_NAME` / `ZRLOG_AGENT_VERSION`，或放在 `zrlog.json` 中：
+
+```json
+{
+  "site_url": "https://blog.example.com",
+  "agent_name": "dot",
+  "agent_version": "1.2"
+}
+```
+
+也可以直接用命令保存，之后普通命令自动使用该 agent，无需每次传参，也无需先登录：
+
+```bash
+zrlogctl agent set --agent-name dot --agent-version 1.2
+zrlogctl agent show
+zrlogctl agent show --output json
+zrlogctl article list
+# 替换名称并清除旧版本
+zrlogctl agent set --agent-name muse
+# 删除命令保存的配置
+zrlogctl agent unset
+```
+
+命令保存到所选配置目录的 `agent.json`，默认 `~/.config/zrlog/agent.json`，沿用下文的配置目录规则。当前目录已有 `.zrlog/` 时，配置保存到该目录；同一配置目录的后续进程和站点共用。`set` 每次替换名称和版本，未传版本会清除旧版本；不会改写 `.env`、`zrlog.json`、登录凭证或代理设置。`show` 展示覆盖后的实际 User-Agent；`unset` 只清除命令保存的配置，其他来源的配置仍然生效。
+
+名称按 **命令行 > 进程环境变量 > 当前目录 `.env` > 当前目录 `zrlog.json` > 命令保存的 `agent.json`** 选择。版本来自名称所在层或更高优先级的显式配置；临时切换名称时不会沿用低优先级 agent 的旧版本。版本可省略；配置版本时必须有名称。名称和版本各限 1–128 个 ASCII HTTP product token 字符，可使用字母、数字、连字符、下划线和点，不接受空格、斜杠或控制字符。厂商可写入名称，例如 `openai-dot`、`meta-muse`。`--agent-name ''` 可临时取消 agent 声明。
+
+业务请求发送 `User-Agent: zrlogctl/<CLI版本> <agent名称>[/<agent版本>]`；未配置时保留 `zrlogctl/<CLI版本>`。便捷命令和 `api call` 使用同一格式，`api call --dry-run` 展示实际 User-Agent。更新下载使用 CLI 自身的 User-Agent。
+
+新版服务端在操作日志中独立保存 `agentName`、`agentVersion`，并继续保留客户端信息，如 `ZrLogCtl 0.1.42`；旧日志无需迁移。此能力需要同步更新 `zrlog-base` 和 `zrlog-admin-web`。旧服务端仍可处理请求，但不会保存新增来源字段。agent 名称是调用方声明的标识，不能作为认证或权限判断依据；账号仍由登录凭证确定。未声明时不推测实际调用者。
 
 ## 配置目录
 

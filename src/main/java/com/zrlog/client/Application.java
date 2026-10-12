@@ -34,7 +34,7 @@ import java.util.concurrent.Callable;
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class, Application.NavigationGroup.class,
                 Application.MediaGroup.class, Application.ThemeGroup.class, Application.PluginGroup.class,
                 Application.ContentGroup.class, Application.UpdateGroup.class, Application.ProxyGroup.class,
-                Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
+                Application.AgentGroup.class, Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
                 OpenApiCommands.class})
 public class Application implements Runnable {
 
@@ -57,6 +57,14 @@ public class Application implements Runnable {
     @Option(names = "--timeout", scope = CommandLine.ScopeType.INHERIT, defaultValue = "30",
             description = "HTTP timeout in seconds")
     int timeout = 30;
+
+    @Option(names = {"--agent-name", "--agent"}, scope = CommandLine.ScopeType.INHERIT,
+            description = "Caller agent name (any HTTP product token; defaults to ZRLOG_AGENT_NAME or project configuration)")
+    String agentName;
+
+    @Option(names = "--agent-version", scope = CommandLine.ScopeType.INHERIT,
+            description = "Optional caller agent version (defaults to ZRLOG_AGENT_VERSION or project configuration)")
+    String agentVersion;
 
     Map<String, String> environment = System.getenv();
     Path dotenvPath = Path.of(".env");
@@ -126,6 +134,7 @@ public class Application implements Runnable {
         }
         if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
         try {
+            AgentIdentity agent = agentIdentity();
             boolean bearer = accessTokenSource();
             if (token == null || token.isBlank()) {
                 OAuthLogin login = oauthLogin(resolvedSite);
@@ -136,7 +145,7 @@ public class Application implements Runnable {
                 token = saved.accessToken(); bearer = true;
             }
             ClientConfig detected = new ClientConfig(java.net.URI.create(resolvedSite), token.trim(), Duration.ofSeconds(timeout));
-            ClientConfig config = new ClientConfig(detected.baseUri(), detected.token(), detected.timeout(), bearer || detected.bearer());
+            ClientConfig config = new ClientConfig(detected.baseUri(), detected.token(), detected.timeout(), bearer || detected.bearer(), agent);
             return new ZrLogApi(new ZrLogOpenApiClient(config), this::publishProgress);
         } catch (IllegalArgumentException e) {
             throw new ApiException(e.getMessage(), 3, e);
@@ -153,6 +162,78 @@ public class Application implements Runnable {
         if (value == null || value.isBlank()) throw new ApiException("Set --site, site_url in zrlog.json, or ZRLOG_SITE_URL", 3, null, null);
         try { return ClientConfig.normalizeBaseUri(java.net.URI.create(value)); }
         catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
+    }
+
+    AgentIdentity agentIdentity() {
+        String version = agentVersion;
+        if (agentName != null) return agentIdentity(agentName, version);
+        version = first(version, environment.get("ZRLOG_AGENT_VERSION"));
+        if (environment.get("ZRLOG_AGENT_NAME") != null) return agentIdentity(environment.get("ZRLOG_AGENT_NAME"), version);
+        version = first(version, dotenv().get("ZRLOG_AGENT_VERSION"));
+        if (dotenv().get("ZRLOG_AGENT_NAME") != null) return agentIdentity(dotenv().get("ZRLOG_AGENT_NAME"), version);
+        ProjectConfig.Settings settings = projectConfig().read();
+        version = first(version, settings.agentVersion());
+        if (settings.agentName() != null) return agentIdentity(settings.agentName(), version);
+        AgentIdentity saved = agentConfig().read();
+        return agentIdentity(saved == null ? null : saved.name(), first(version, saved == null ? null : saved.version()));
+    }
+
+    private static AgentIdentity agentIdentity(String name, String version) {
+        try { return new AgentIdentity(name, version); }
+        catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
+    }
+
+    private AgentConfig agentConfig() { return new AgentConfig(configDirectory()); }
+
+    private void emitAgent(AgentIdentity identity, String message) {
+        var value = new com.google.gson.JsonObject();
+        value.addProperty("configured", identity.name() != null);
+        if (identity.name() != null) value.addProperty("agent_name", identity.name());
+        if (identity.version() != null) value.addProperty("agent_version", identity.version());
+        value.addProperty("user_agent", identity.userAgent());
+        value.addProperty("config_file", agentConfig().path().toString());
+        emit(value, message);
+    }
+
+    @Command(name = "agent", mixinStandardHelpOptions = true, description = "Manage persistent caller agent configuration",
+            subcommands = {AgentSet.class, AgentShow.class, AgentUnset.class})
+    static class AgentGroup implements Runnable {
+        @ParentCommand Application root;
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+
+    @Command(name = "set", mixinStandardHelpOptions = true,
+            description = "Save --agent-name and optional --agent-version for later commands; no login required")
+    static class AgentSet implements Callable<Integer> {
+        @ParentCommand AgentGroup group;
+        public Integer call() {
+            Application root = group.root;
+            AgentIdentity identity = agentIdentity(root.agentName, root.agentVersion);
+            if (identity.name() == null) throw new ApiException("agent set requires --agent-name <NAME>", 3, null, null);
+            root.agentConfig().save(identity);
+            root.emitAgent(identity, "Saved agent " + identity.name() + " to " + root.agentConfig().path());
+            return 0;
+        }
+    }
+
+    @Command(name = "show", mixinStandardHelpOptions = true, description = "Show the effective agent and User-Agent after configuration overrides")
+    static class AgentShow implements Callable<Integer> {
+        @ParentCommand AgentGroup group;
+        public Integer call() {
+            AgentIdentity identity = group.root.agentIdentity();
+            group.root.emitAgent(identity, "User-Agent: " + identity.userAgent() + "\nSaved configuration: " + group.root.agentConfig().path());
+            return 0;
+        }
+    }
+
+    @Command(name = "unset", mixinStandardHelpOptions = true, description = "Remove the saved agent; command-line, environment and project overrides still apply")
+    static class AgentUnset implements Callable<Integer> {
+        @ParentCommand AgentGroup group;
+        public Integer call() {
+            group.root.agentConfig().clear();
+            group.root.emit(java.util.Map.of("configured", false), "Saved agent configuration removed");
+            return 0;
+        }
     }
 
     void publishProgress(String event, com.google.gson.JsonObject data) {
