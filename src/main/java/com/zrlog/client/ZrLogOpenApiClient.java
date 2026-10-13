@@ -63,8 +63,29 @@ public final class ZrLogOpenApiClient {
         }
     }
 
+    /** Consume a JSON SSE response event, with ordinary JSON fallback and no write retries. */
+    public JsonObject stream(String operationId, JsonElement body, BiConsumer<String, JsonObject> progress) {
+        var plan = OpenApiRequest.prepare(document, operationId,
+                input(Map.of(), body, List.of(), "text/event-stream, application/json"));
+        JsonObject[] response = {null};
+        var result = execute(plan, envelope -> {
+            String event = envelope.get("event").getAsString();
+            JsonObject value = checkedResponse(JsonSupport.parseObject(envelope.get("data").getAsString(),
+                    operationId + " event " + event), 200);
+            progress.accept(event, value);
+            if (event.equals("sse-error")) {
+                throw new ApiException("ZrLog stream failed: " + JsonSupport.string(value, "message", "unknown error")
+                        + "; execution may already have taken effect. It was not retried.", 6, 200, null);
+            }
+            if (event.equals("response")) response[0] = value;
+        });
+        if (!OpenApiExecutor.mediaType(result.contentType()).equals("text/event-stream")) return json(result, operationId);
+        if (response[0] == null) throw new ApiException("Stream completed without a response for " + operationId, 5, null, null);
+        return response[0];
+    }
+
     private OpenApiExecutor.Result execute(OpenApiRequest.Plan plan, Consumer<JsonObject> events) {
-        return OpenApiExecutor.execute(client, document, plan, config.baseUri(), config.timeout(), () -> config, events);
+        return OpenApiExecutor.execute(client, document, plan, config.baseUri(), config.timeout(), config.userAgent(), () -> config, events);
     }
 
     private static OpenApiRequest.Input input(Map<String, String> query, JsonElement body, List<String> files, String accept) {

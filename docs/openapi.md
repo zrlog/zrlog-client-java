@@ -67,7 +67,7 @@ JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用
 
 ## 已覆盖的 CLI 业务接口
 
-内置后台契约覆盖 14 个业务操作，插件运行时契约另提供 `uploadPlugin`（`POST /api/admin/plugins/upload`）。使用 `api --source plugin-core describe uploadPlugin` 查看上传参数。OAuth 登录与刷新仍使用现有授权协议，不通过业务 OpenAPI 调用。
+内置后台契约覆盖 17 个业务操作，插件运行时契约另提供 `uploadPlugin`（`POST /api/admin/plugins/upload`）。使用 `api --source plugin-core describe uploadPlugin` 查看上传参数。OAuth 登录与刷新仍使用现有授权协议，不通过业务 OpenAPI 调用。
 
 | operationId | HTTP 请求 |
 | --- | --- |
@@ -85,6 +85,17 @@ JSON 或文本请求使用 `--body '内容'` 或 `--body @文件`；表单使用
 | uploadAttachment | POST /api/admin/upload |
 | uploadTemplate | POST /api/admin/template/upload |
 | createExternalNotification | POST /api/webhook/message-center/notice |
+| checkZrLogUpgrade | GET /api/admin/upgrade |
+| getZrLogUpgradeNotice | GET /api/admin/upgrade/notice?fetch=true |
+| executeZrLogUpgrade | POST /api/admin/upgrade/doUpgrade |
+
+ZrLog 站点升级需要 `system.manage`。`executeZrLogUpgrade` 的请求体必须为 `{"upgradeRiskAccepted":true}`，SSE 的最终事件为 `response`，失败事件为 `sse-error`；`upgrade-progress` 中的 restart/complete 阶段不代表最终处理成功。普通 JSON 与最终事件都需检查 `error` 和 `data.finish`，成功处理后另行验证重启后的版本。便捷命令与授权说明见 [站点升级](../README.md#zrlog-站点升级)。
+
+```bash
+zrlogctl api call checkZrLogUpgrade
+zrlogctl api call getZrLogUpgradeNotice --query fetch=true
+zrlogctl api call executeZrLogUpgrade --body '{"upgradeRiskAccepted":true}' --accept 'text/event-stream, application/json' --timeout 600
+```
 
 `api call listArticles` 每次只取一页。省略状态、每页条数或排序时，服务端使用账号的后台偏好；上面的示例显式传空 `status` 来查询全部可见状态。需要全部文章时，按返回的 `data.totalElements` 逐页读取并校验重复和数量变化。`getArticle` 返回 `data.article` 的完整快照；更新前提取可写字段以及 `logId`、`version`，不要回传只读字段或 UI 元数据。
 

@@ -49,6 +49,14 @@ class ZrLogOpenApiClientTest {
         assertEquals(true, result.getAsJsonObject("data").get("ok").getAsBoolean());
     }
 
+    @Test void sendsConfiguredCallerAlongsideTheCliProduct() throws Exception {
+        client = new ZrLogOpenApiClient(new ClientConfig(server.url("/sub").uri(), "secret-token",
+                Duration.ofSeconds(2), false, new AgentIdentity("dot", "1.2-beta.1")));
+        server.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("{\"error\":0}"));
+        client.call("listCategories", Map.of(), null);
+        assertEquals(BuildInfo.USER_AGENT + " dot/1.2-beta.1", server.takeRequest().getHeader("User-Agent"));
+    }
+
     @Test void convenienceCommandsFollowContractRoutesMethodsAndAuthentication() throws Exception {
         JsonObject contract = OpenApiDocument.load(null, "admin-web").root().deepCopy();
         JsonObject paths = contract.getAsJsonObject("paths");

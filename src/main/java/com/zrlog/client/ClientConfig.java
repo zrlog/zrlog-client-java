@@ -4,7 +4,11 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.Set;
 
-public record ClientConfig(URI baseUri, String token, Duration timeout, boolean bearer) {
+public record ClientConfig(URI baseUri, String token, Duration timeout, boolean bearer, AgentIdentity agent) {
+
+    public ClientConfig(URI baseUri, String token, Duration timeout, boolean bearer) {
+        this(baseUri, token, timeout, bearer, null);
+    }
 
     public ClientConfig(URI baseUri, String token, Duration timeout) {
         this(baseUri, token, timeout, token != null && (token.startsWith("zrpat_") || token.startsWith("zrmcp_")));
@@ -13,6 +17,7 @@ public record ClientConfig(URI baseUri, String token, Duration timeout, boolean 
     private static final Set<String> LOCAL_HOSTS = Set.of("localhost", "127.0.0.1", "[::1]", "::1");
 
     public ClientConfig {
+        agent = agent == null ? new AgentIdentity(null, null) : agent;
         baseUri = normalizeBaseUri(baseUri);
         if (token == null || token.isBlank()) {
             throw new IllegalArgumentException("ZrLog access token is required");
@@ -25,6 +30,8 @@ public record ClientConfig(URI baseUri, String token, Duration timeout, boolean 
             throw new IllegalArgumentException("ZrLog HTTP timeout must be greater than zero");
         }
     }
+
+    public String userAgent() { return agent.userAgent(); }
 
     public static URI normalizeBaseUri(URI baseUri) {
         if (baseUri == null || baseUri.getHost() == null || baseUri.getUserInfo() != null

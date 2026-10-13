@@ -97,6 +97,8 @@ public class OpenApiCommands implements Runnable {
             var document = group.document();
             var plan = OpenApiRequest.prepare(document, operationId, new OpenApiRequest.Input(
                     Map.of("path", path, "query", query, "header", header, "cookie", cookie), body, form, files, contentType, accept));
+            String userAgent = group.root.agentIdentity().userAgent();
+            plan.preview().getAsJsonObject("headers").addProperty("User-Agent", userAgent);
             if (dryRun) {
                 group.root.emit(plan.preview(), JsonSupport.PRETTY_GSON.toJson(plan.preview()));
                 return 0;
@@ -104,7 +106,7 @@ public class OpenApiCommands implements Runnable {
             if (saveResponse != null && Files.exists(saveResponse)) throw OpenApiDocument.invalid("Response output already exists: " + saveResponse);
             if (group.root.timeout <= 0) throw OpenApiDocument.invalid("--timeout must be greater than zero");
             var result = OpenApiExecutor.execute(document, plan, group.root.openApiSite(), Duration.ofSeconds(group.root.timeout),
-                    () -> group.root.api().http().config(), event -> System.err.println(JsonSupport.GSON.toJson(event)));
+                    userAgent, () -> group.root.api().http().config(), event -> System.err.println(JsonSupport.GSON.toJson(event)));
             String type = OpenApiExecutor.mediaType(result.contentType());
             JsonElement value = JsonNull.INSTANCE;
             String text = new String(result.body(), StandardCharsets.UTF_8);

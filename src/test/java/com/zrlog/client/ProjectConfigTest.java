@@ -16,6 +16,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ProjectConfigTest {
     @TempDir Path temporary;
 
+    @Test void preservesAgentConfigurationWhenLoginChangesTheSite() throws Exception {
+        Path path = temporary.resolve("zrlog.json");
+        Files.writeString(path, "{\"site_url\":\"https://old.example\",\"agent_name\":\"dot\",\"agent_version\":\"1.2\"}");
+        ProjectConfig config = new ProjectConfig(path);
+        config.saveSite("https://new.example/sub");
+        assertEquals("https://new.example/sub", config.site());
+        assertEquals("dot", config.read().agentName());
+        assertEquals("1.2", config.read().agentVersion());
+    }
+
     @Test void savesOnlyTheSiteAndPreservesUnchangedProjectFormatting() throws Exception {
         Path path = temporary.resolve("zrlog.json");
         ProjectConfig config = new ProjectConfig(path);
@@ -37,7 +47,10 @@ class ProjectConfigTest {
             "{\"site_url\":\"http://blog.example\"}",
             "{\"site_url\":\"https://user:secret-value@blog.example\"}",
             "{\"site_url\":\"https://blog.example?token=secret-value\"}",
-            "{\"site_url\":\"https://blog.example\",\"token\":\"secret-value\"}"
+            "{\"site_url\":\"https://blog.example\",\"token\":\"secret-value\"}",
+            "{\"site_url\":\"https://blog.example\",\"agent_name\":123}",
+            "{\"site_url\":\"https://blog.example\",\"agent_name\":\"dot/1\"}",
+            "{\"site_url\":\"https://blog.example\",\"agent_version\":\"1\"}"
     })
     void rejectsInvalidOrSecretBearingConfigurationWithoutOverwritingIt(String contents) throws Exception {
         Path path = temporary.resolve("zrlog.json");

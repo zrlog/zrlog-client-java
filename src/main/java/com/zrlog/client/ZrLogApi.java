@@ -8,6 +8,8 @@ import com.zrlog.client.model.Article;
 import com.zrlog.client.model.Category;
 import com.zrlog.client.model.Navigation;
 import com.zrlog.client.model.Theme;
+import com.zrlog.client.model.UpgradeCheck;
+import com.zrlog.client.model.UpgradeResult;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -40,6 +42,62 @@ public class ZrLogApi {
     }
 
     ZrLogOpenApiClient http() { return http; }
+
+    public UpgradeCheck checkUpgrade() {
+        JsonObject result = upgradeData(http.call("checkZrLogUpgrade", Map.of(), null));
+        boolean available = requiredBoolean(result, "upgrade");
+        JsonObject version = optionalObject(result, "version");
+        if (available && (version == null || JsonSupport.string(version, "version", "").isBlank())) {
+            throw protocol("Upgrade check has no target version");
+        }
+        return new UpgradeCheck(available, requiredBoolean(result, "onlineUpgradable"), version,
+                JsonSupport.string(result, "disableUpgradeReason", ""), optionalObject(result, "backupProtection"),
+                optionalBoolean(result, "dockerMode"), optionalBoolean(result, "systemServiceMode"),
+                optionalBoolean(result, "faasMode"), optionalBoolean(result, "warMode"),
+                optionalBoolean(result, "nativeImageMode"));
+    }
+
+    public UpgradeResult executeUpgrade(boolean riskAccepted, BiConsumer<String, JsonObject> progress) {
+        if (!riskAccepted) throw new ApiException("ZrLog upgrade requires --accept-risk", 3, null, null);
+        JsonObject result = upgradeData(http.stream("executeZrLogUpgrade",
+                JsonSupport.object(Map.of("upgradeRiskAccepted", true)), progress));
+        String message = JsonSupport.string(result, "message", null);
+        if (message == null) throw protocol("Upgrade response has no data.message");
+        return new UpgradeResult(requiredBoolean(result, "finish"), message);
+    }
+
+    private static boolean requiredBoolean(JsonObject value, String name) {
+        Boolean result = optionalBoolean(value, name);
+        if (result == null) throw protocol("Upgrade response has no " + name);
+        return result;
+    }
+
+    private static JsonObject upgradeData(JsonObject response) {
+        JsonElement error = response.get("error");
+        if (error == null || !error.isJsonPrimitive() || !error.getAsJsonPrimitive().isNumber()
+                || !error.getAsString().equals("0")) {
+            throw protocol("Upgrade response has no valid error=0 confirmation");
+        }
+        JsonObject result = optionalObject(response, "data");
+        if (result == null) throw protocol("Upgrade response has no data object");
+        return result;
+    }
+
+    private static Boolean optionalBoolean(JsonObject value, String name) {
+        JsonElement element = value.get(name);
+        if (element == null || element.isJsonNull()) return null;
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isBoolean()) {
+            throw protocol("Upgrade response has an invalid " + name);
+        }
+        return element.getAsBoolean();
+    }
+
+    private static JsonObject optionalObject(JsonObject value, String name) {
+        JsonElement element = value.get(name);
+        if (element == null || element.isJsonNull()) return null;
+        if (!element.isJsonObject()) throw protocol("Upgrade response has an invalid " + name);
+        return element.getAsJsonObject();
+    }
 
     public List<Category> listCategories() {
         JsonArray rows = data(http.call("listCategories", Map.of(), null)).getAsJsonArray("rows");

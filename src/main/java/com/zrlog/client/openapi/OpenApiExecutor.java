@@ -26,12 +26,22 @@ public final class OpenApiExecutor {
 
     public static Result execute(HttpClient client, OpenApiDocument document, OpenApiRequest.Plan plan, URI site, Duration timeout,
                                  Supplier<ClientConfig> credentials, Consumer<JsonObject> events) {
+        return execute(client, document, plan, site, timeout, BuildInfo.USER_AGENT, credentials, events);
+    }
+
+    public static Result execute(OpenApiDocument document, OpenApiRequest.Plan plan, URI site, Duration timeout, String userAgent,
+                                 Supplier<ClientConfig> credentials, Consumer<JsonObject> events) {
+        return execute(HttpClients.create(timeout), document, plan, site, timeout, userAgent, credentials, events);
+    }
+
+    public static Result execute(HttpClient client, OpenApiDocument document, OpenApiRequest.Plan plan, URI site, Duration timeout,
+                                 String userAgent, Supplier<ClientConfig> credentials, Consumer<JsonObject> events) {
         URI target = URI.create(ClientConfig.normalizeBaseUri(site).toString() + plan.path());
         Map<String, String> headers = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         headers.putAll(plan.headers());
         authorize(document, plan.operation(), credentials, headers);
         HttpRequest.Builder builder = HttpRequest.newBuilder(target).timeout(timeout)
-                .header("User-Agent", BuildInfo.USER_AGENT);
+                .header("User-Agent", userAgent);
         HttpClients.withMethod(builder, plan.operation().method(), plan.body());
         try { headers.forEach(builder::header); }
         catch (IllegalArgumentException e) { throw invalid("Invalid request header: " + e.getMessage()); }

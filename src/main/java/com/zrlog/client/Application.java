@@ -33,8 +33,8 @@ import java.util.concurrent.Callable;
         footer = "Configuration directory: ./.zrlog (if present) > ZRLOG_CONFIG_DIR > $XDG_CONFIG_HOME/zrlog > ~/.config/zrlog.",
         subcommands = {Application.ArticleGroup.class, Application.CategoryGroup.class, Application.NavigationGroup.class,
                 Application.MediaGroup.class, Application.ThemeGroup.class, Application.PluginGroup.class,
-                Application.ContentGroup.class, Application.UpdateGroup.class, Application.ProxyGroup.class,
-                Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
+                Application.ContentGroup.class, Application.UpgradeGroup.class, Application.UpdateGroup.class, Application.ProxyGroup.class,
+                Application.AgentGroup.class, Application.Login.class, Application.Logout.class, Application.NotificationGroup.class,
                 OpenApiCommands.class})
 public class Application implements Runnable {
 
@@ -57,6 +57,14 @@ public class Application implements Runnable {
     @Option(names = "--timeout", scope = CommandLine.ScopeType.INHERIT, defaultValue = "30",
             description = "HTTP timeout in seconds")
     int timeout = 30;
+
+    @Option(names = {"--agent-name", "--agent"}, scope = CommandLine.ScopeType.INHERIT,
+            description = "Caller agent name (any HTTP product token; defaults to ZRLOG_AGENT_NAME or project configuration)")
+    String agentName;
+
+    @Option(names = "--agent-version", scope = CommandLine.ScopeType.INHERIT,
+            description = "Optional caller agent version (defaults to ZRLOG_AGENT_VERSION or project configuration)")
+    String agentVersion;
 
     Map<String, String> environment = System.getenv();
     Path dotenvPath = Path.of(".env");
@@ -126,6 +134,7 @@ public class Application implements Runnable {
         }
         if (timeout <= 0) throw new ApiException("--timeout must be greater than zero", 3, null, null);
         try {
+            AgentIdentity agent = agentIdentity();
             boolean bearer = accessTokenSource();
             if (token == null || token.isBlank()) {
                 OAuthLogin login = oauthLogin(resolvedSite);
@@ -136,7 +145,7 @@ public class Application implements Runnable {
                 token = saved.accessToken(); bearer = true;
             }
             ClientConfig detected = new ClientConfig(java.net.URI.create(resolvedSite), token.trim(), Duration.ofSeconds(timeout));
-            ClientConfig config = new ClientConfig(detected.baseUri(), detected.token(), detected.timeout(), bearer || detected.bearer());
+            ClientConfig config = new ClientConfig(detected.baseUri(), detected.token(), detected.timeout(), bearer || detected.bearer(), agent);
             return new ZrLogApi(new ZrLogOpenApiClient(config), this::publishProgress);
         } catch (IllegalArgumentException e) {
             throw new ApiException(e.getMessage(), 3, e);
@@ -153,6 +162,78 @@ public class Application implements Runnable {
         if (value == null || value.isBlank()) throw new ApiException("Set --site, site_url in zrlog.json, or ZRLOG_SITE_URL", 3, null, null);
         try { return ClientConfig.normalizeBaseUri(java.net.URI.create(value)); }
         catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
+    }
+
+    AgentIdentity agentIdentity() {
+        String version = agentVersion;
+        if (agentName != null) return agentIdentity(agentName, version);
+        version = first(version, environment.get("ZRLOG_AGENT_VERSION"));
+        if (environment.get("ZRLOG_AGENT_NAME") != null) return agentIdentity(environment.get("ZRLOG_AGENT_NAME"), version);
+        version = first(version, dotenv().get("ZRLOG_AGENT_VERSION"));
+        if (dotenv().get("ZRLOG_AGENT_NAME") != null) return agentIdentity(dotenv().get("ZRLOG_AGENT_NAME"), version);
+        ProjectConfig.Settings settings = projectConfig().read();
+        version = first(version, settings.agentVersion());
+        if (settings.agentName() != null) return agentIdentity(settings.agentName(), version);
+        AgentIdentity saved = agentConfig().read();
+        return agentIdentity(saved == null ? null : saved.name(), first(version, saved == null ? null : saved.version()));
+    }
+
+    private static AgentIdentity agentIdentity(String name, String version) {
+        try { return new AgentIdentity(name, version); }
+        catch (IllegalArgumentException e) { throw new ApiException(e.getMessage(), 3, e); }
+    }
+
+    private AgentConfig agentConfig() { return new AgentConfig(configDirectory()); }
+
+    private void emitAgent(AgentIdentity identity, String message) {
+        var value = new com.google.gson.JsonObject();
+        value.addProperty("configured", identity.name() != null);
+        if (identity.name() != null) value.addProperty("agent_name", identity.name());
+        if (identity.version() != null) value.addProperty("agent_version", identity.version());
+        value.addProperty("user_agent", identity.userAgent());
+        value.addProperty("config_file", agentConfig().path().toString());
+        emit(value, message);
+    }
+
+    @Command(name = "agent", mixinStandardHelpOptions = true, description = "Manage persistent caller agent configuration",
+            subcommands = {AgentSet.class, AgentShow.class, AgentUnset.class})
+    static class AgentGroup implements Runnable {
+        @ParentCommand Application root;
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+
+    @Command(name = "set", mixinStandardHelpOptions = true,
+            description = "Save --agent-name and optional --agent-version for later commands; no login required")
+    static class AgentSet implements Callable<Integer> {
+        @ParentCommand AgentGroup group;
+        public Integer call() {
+            Application root = group.root;
+            AgentIdentity identity = agentIdentity(root.agentName, root.agentVersion);
+            if (identity.name() == null) throw new ApiException("agent set requires --agent-name <NAME>", 3, null, null);
+            root.agentConfig().save(identity);
+            root.emitAgent(identity, "Saved agent " + identity.name() + " to " + root.agentConfig().path());
+            return 0;
+        }
+    }
+
+    @Command(name = "show", mixinStandardHelpOptions = true, description = "Show the effective agent and User-Agent after configuration overrides")
+    static class AgentShow implements Callable<Integer> {
+        @ParentCommand AgentGroup group;
+        public Integer call() {
+            AgentIdentity identity = group.root.agentIdentity();
+            group.root.emitAgent(identity, "User-Agent: " + identity.userAgent() + "\nSaved configuration: " + group.root.agentConfig().path());
+            return 0;
+        }
+    }
+
+    @Command(name = "unset", mixinStandardHelpOptions = true, description = "Remove the saved agent; command-line, environment and project overrides still apply")
+    static class AgentUnset implements Callable<Integer> {
+        @ParentCommand AgentGroup group;
+        public Integer call() {
+            group.root.agentConfig().clear();
+            group.root.emit(java.util.Map.of("configured", false), "Saved agent configuration removed");
+            return 0;
+        }
     }
 
     void publishProgress(String event, com.google.gson.JsonObject data) {
@@ -273,10 +354,10 @@ public class Application implements Runnable {
     static class Login implements Callable<Integer> {
         private static final List<String> DEFAULT_PERMISSIONS = List.of(
                 "article.read", "article.create", "article.update", "article.publish",
-                "taxonomy.read", "taxonomy.manage", "asset.upload", "site.configure", "plugin.manage", "notification.create");
+                "taxonomy.read", "taxonomy.manage", "asset.upload", "site.configure", "plugin.manage", "notification.create", "system.manage");
         @ParentCommand Application root;
         @Option(names = "--no-browser", description = "Print the authorization URL without opening a browser") boolean noBrowser;
-        @Option(names = "--permissions", split = ",", description = "Request only these account action IDs (defaults to article publishing, categories, navigation, uploads, themes, plugins, and notifications)") List<String> permissions;
+        @Option(names = "--permissions", split = ",", description = "Request only these account action IDs (defaults to article publishing, categories, navigation, uploads, themes, plugins, notifications, and site upgrades)") List<String> permissions;
         @Option(names = "--inherit-permissions", description = "Allow choosing inherited account permissions in the browser instead of the default CLI permissions") boolean inheritPermissions;
         @Option(names = "--wait", defaultValue = "300", description = "Seconds to wait for browser authorization") int wait;
         public Integer call() {
@@ -699,6 +780,63 @@ public class Application implements Runnable {
                 return Map.<String, Object>of("file", path.toString(), "alias", source.alias(), "valid", true);
             }).toList();
             group.root.emit(results, results.size() + " content files valid");
+            return 0;
+        }
+    }
+
+    @Command(name = "upgrade", mixinStandardHelpOptions = true,
+            description = "Check or apply ZrLog site upgrades (requires system.manage)",
+            subcommands = {UpgradeCheck.class, UpgradeApply.class})
+    static class UpgradeGroup implements Runnable {
+        @ParentCommand Application root;
+        public void run() { new CommandLine(this).usage(System.out); }
+    }
+
+    @Command(name = "check", mixinStandardHelpOptions = true,
+            description = "Check ZrLog site updates, online upgrade support, and backup status")
+    static class UpgradeCheck implements Callable<Integer> {
+        @ParentCommand UpgradeGroup group;
+        public Integer call() {
+            var check = group.root.api().checkUpgrade();
+            String message = check.upgrade()
+                    ? "ZrLog update available: " + JsonSupport.string(check.version(), "version", "")
+                    : "ZrLog is up to date";
+            message += "\nOnline upgrade: " + (check.onlineUpgradable() ? "available" : "unavailable");
+            if (!check.disableUpgradeReason().isBlank()) message += "\n" + check.disableUpgradeReason();
+            if (check.backupProtection() != null) {
+                message += "\nBackup protection: " + JsonSupport.string(check.backupProtection(), "status", "unknown");
+            }
+            group.root.emit(check, message);
+            return 0;
+        }
+    }
+
+    @Command(name = "apply", mixinStandardHelpOptions = true,
+            description = "Apply the ZrLog site's latest configured update; progress goes to stderr")
+    static class UpgradeApply implements Callable<Integer> {
+        @ParentCommand UpgradeGroup group;
+        @Option(names = "--accept-risk", required = true,
+                description = "Accept the server's upgrade risk confirmation; ensure backups are available") boolean acceptRisk;
+        public Integer call() {
+            if (!acceptRisk) throw new ApiException("ZrLog upgrade requires --accept-risk", 3, null, null);
+            ZrLogApi api = group.root.api();
+            var check = api.checkUpgrade();
+            if (!check.upgrade()) {
+                group.root.emit(Map.of("updated", false), "ZrLog is up to date");
+                return 0;
+            }
+            if (!check.onlineUpgradable()) {
+                throw new ApiException("ZrLog online upgrade is unavailable: " + check.disableUpgradeReason(), 6, null, null);
+            }
+            var result = api.executeUpgrade(true, (event, data) -> {
+                if (group.root.output == Output.json) {
+                    System.err.println(JsonSupport.GSON.toJson(Map.of("event", event, "data", data)));
+                } else if (!event.equals("response")) {
+                    System.err.println(JsonSupport.string(data, "message", event));
+                }
+            });
+            if (!result.finish()) throw new ApiException("ZrLog upgrade did not finish: " + result.message(), 6, null, null);
+            group.root.emit(result, "ZrLog upgrade processing completed: " + result.message());
             return 0;
         }
     }
