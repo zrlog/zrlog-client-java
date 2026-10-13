@@ -27,6 +27,20 @@ class ApplicationTest {
 
     @TempDir Path temporary;
 
+    @Test void resolvesAgentOptionsEnvironmentDotenvAndProjectConfigurationInOrder() throws Exception {
+        Application app = isolatedApplication("agent-project");
+        Files.writeString(app.projectConfigPath,
+                "{\"site_url\":\"https://blog.example\",\"agent_name\":\"custom-agent\",\"agent_version\":\"1\"}");
+        assertEquals(new AgentIdentity("custom-agent", "1"), app.agentIdentity());
+        Files.writeString(app.dotenvPath, "ZRLOG_AGENT_NAME=muse\nZRLOG_AGENT_VERSION=2\n");
+        app = isolatedApplication("agent-project");
+        assertEquals(new AgentIdentity("muse", "2"), app.agentIdentity());
+        app.environment = Map.of("ZRLOG_AGENT_NAME", "dot", "ZRLOG_AGENT_VERSION", "3");
+        assertEquals(new AgentIdentity("dot", "3"), app.agentIdentity());
+        Application.commandLine(app).parseArgs("article", "list", "--agent-name", "my-agent", "--agent-version", "4-beta.1");
+        assertEquals(new AgentIdentity("my-agent", "4-beta.1"), app.agentIdentity());
+    }
+
     @Test
     void acceptsInheritedOptionsAfterTheLeafCommandAndWritesJsonErrors() {
         StringWriter errors = new StringWriter();
@@ -303,7 +317,7 @@ class ApplicationTest {
         try (MockWebServer server = new MockWebServer()) {
             server.start();
             String defaults = "article.read article.create article.update article.publish taxonomy.read "
-                    + "taxonomy.manage asset.upload site.configure plugin.manage notification.create offline_access";
+                    + "taxonomy.manage asset.upload site.configure plugin.manage notification.create system.manage offline_access";
             for (String mode : List.of("default", "custom", "inherit")) {
                 Application app = isolatedApplication(mode);
                 String issuer = server.url("/sub").toString();

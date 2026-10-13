@@ -34,6 +34,8 @@ tags:
     description: 主题安装与管理
   - name: Notification
     description: 外部消息中心通知
+  - name: Upgrade
+    description: ZrLog 站点版本检查与升级
 paths:
   /api/admin/article:
     get:
@@ -842,6 +844,121 @@ paths:
           description: Bearer 无效或已失效
         "403":
           description: 缺少发送通知权限
+  /api/admin/upgrade:
+    get:
+      tags: [Upgrade]
+      summary: 检查 ZrLog 新版本及在线升级能力
+      description: |-
+        需要 `system.manage`，仅站长和管理员可授权。强制刷新站点所选通道的版本信息，
+        返回升级目标、部署模式、在线升级能力和备份验证状态。
+        只承诺 data 中声明的字段，不承诺附带的后台页面元数据。
+        onlineUpgradable=false 时应按 disableUpgradeReason 手动升级。
+      operationId: checkZrLogUpgrade
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.UpgradeController#index
+      x-zrlog-response-kind: page-hydration
+      x-zrlog-side-effects: [刷新并缓存升级版本信息]
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      responses:
+        "200":
+          description: 检查结果；必须检查 error，upgrade=false 表示没有可用更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradeCheckResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/upgrade/notice:
+    get:
+      tags: [Upgrade]
+      summary: 获取 ZrLog 版本更新通知
+      description: 需要 `system.manage`。默认读取缓存；fetch=true 时刷新版本信息。升级通道由站点配置决定。
+      operationId: getZrLogUpgradeNotice
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.UpgradeController#notice
+      x-zrlog-response-kind: action
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      parameters:
+        - name: fetch
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        "200":
+          description: 更新通知；必须检查 error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradeNoticeResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
+  /api/admin/upgrade/doUpgrade:
+    post:
+      tags: [Upgrade]
+      summary: 执行 ZrLog 站点升级
+      description: |-
+        需要 `system.manage`。请求必须明确提交 upgradeRiskAccepted=true，与后台升级确认一致。
+        升级到站点配置通道的最新版本，目标由服务端重新检查，不接受任意下载地址、镜像或版本。
+        接收 SSE 时发送 upgrade-progress，最终 response 为 UpgradeExecuteResponse；
+        sse-error 或缺少 response 的断流表示执行结果未确认，不得自动重试。
+        error=0 仍须检查 data.finish；false 表示未完成，message 提供手动操作说明。
+        finish=true 表示升级处理已完成，不证明重启后的站点可用；调用方需另行验证运行版本。
+      operationId: executeZrLogUpgrade
+      x-zrlog-controller: com.zrlog.admin.web.controller.api.UpgradeController#doUpgrade
+      x-zrlog-response-kind: action
+      x-zrlog-side-effects:
+        - 下载并校验升级包，替换应用文件或由服务端部署集成执行升级
+        - 可能触发服务重启或需要手动重启；不自动回滚数据库
+        - 写入升级操作结果通知和 EXECUTE_UPGRADE 审计
+      security:
+        - AccessTokenBearer: []
+        - AdminTokenHeader: []
+        - AdminTokenCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [upgradeRiskAccepted]
+              properties:
+                upgradeRiskAccepted: {type: boolean, const: true}
+            example: {upgradeRiskAccepted: true}
+      responses:
+        "200":
+          description: 执行结果；检查 error 和 data.finish
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpgradeExecuteResponse"
+            text/event-stream:
+              x-zrlog-stream:
+                completionEvent: response
+                errorEvents: [sse-error]
+              schema:
+                type: string
+                description: |-
+                  UTF-8 SSE。upgrade-progress 的 data 为 UpgradeProgress，response 的 data 为
+                  UpgradeExecuteResponse。sse-error 的 data 包含 message 和可选 error。
+                  下载、校验、解压等进度及 restart/complete 阶段均不代替最终 response。
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        default:
+          $ref: "#/components/responses/ApiError"
 components:
   responses:
     Unauthorized:
@@ -921,6 +1038,97 @@ components:
       name: admin-token
       description: 后台登录建立的管理员会话 Cookie
   schemas:
+    UpgradeVersion:
+      type: object
+      properties:
+        version: {type: string}
+        buildId: {type: string}
+        buildDate: {type: string}
+        releaseDate: {type: string}
+        changeLog: {type: string, description: 版本变更说明，可能包含 HTML}
+        type: {type: string}
+        zipDownloadUrl: {type: string}
+        warDownloadUrl: {type: string}
+        zipFileSize: {type: integer, format: int64}
+        warFileSize: {type: integer, format: int64}
+        checksumAlgorithm: {type: string}
+        zipSha256: {type: string}
+        warSha256: {type: string}
+        sourceCommit: {type: string}
+    UpgradeNotice:
+      type: object
+      required: [upgrade]
+      properties:
+        upgrade: {type: boolean}
+        version:
+          $ref: "#/components/schemas/UpgradeVersion"
+    UpgradeBackupProtection:
+      type: object
+      properties:
+        ready: {type: boolean}
+        requiresRiskAcceptance: {type: boolean}
+        status: {type: string, description: READY、MISSING_BACKUP、BACKUP_STALE 等备份验证状态}
+        lastBackupAt: {type: integer, format: int64}
+        lastBackupFile: {type: string}
+        lastBackupSha256: {type: string}
+        lastVerifiedAt: {type: integer, format: int64}
+        lastVerifiedFile: {type: string}
+        lastVerifiedSha256: {type: string}
+        verificationSuccess: {type: boolean}
+        verificationMessage: {type: string}
+        backupMaxAgeMillis: {type: integer, format: int64}
+        verificationMaxAgeMillis: {type: integer, format: int64}
+    UpgradeCheck:
+      allOf:
+        - $ref: "#/components/schemas/UpgradeNotice"
+        - type: object
+          required: [onlineUpgradable]
+          properties:
+            onlineUpgradable: {type: boolean}
+            disableUpgradeReason: {type: string, description: 手动升级说明，可能包含 HTML}
+            dockerMode: {type: boolean}
+            systemServiceMode: {type: boolean}
+            faasMode: {type: boolean}
+            warMode: {type: boolean}
+            nativeImageMode: {type: boolean}
+            backupProtection:
+              $ref: "#/components/schemas/UpgradeBackupProtection"
+    UpgradeNoticeResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error: {type: integer}
+        message: {type: string}
+        data:
+          $ref: "#/components/schemas/UpgradeNotice"
+    UpgradeCheckResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error: {type: integer}
+        message: {type: string}
+        data:
+          $ref: "#/components/schemas/UpgradeCheck"
+    UpgradeExecuteResponse:
+      type: object
+      required: [error, data]
+      properties:
+        error: {type: integer}
+        message: {type: string}
+        data:
+          type: object
+          required: [finish, message]
+          properties:
+            finish: {type: boolean}
+            message: {type: string}
+    UpgradeProgress:
+      type: object
+      required: [stage, status, message]
+      properties:
+        stage: {type: string, description: download、validate、unzip、restart、complete、manual 等阶段}
+        status: {type: string, enum: [running, complete, error, manual]}
+        message: {type: string}
+        detail: {type: string}
     ArticleListResponse:
       oneOf:
         - type: object
@@ -954,6 +1162,7 @@ components:
         title: {type: string}
         alias: {type: string}
         typeAlias: {type: [string, "null"]}
+        arrange_plugin: {type: [string, "null"], description: 重排插件标识；空值使用主题默认排版}
         typeName: {type: [string, "null"]}
         markdown: {type: [string, "null"]}
         digest: {type: [string, "null"]}
@@ -1187,6 +1396,11 @@ components:
             - string
             - "null"
           description: 关键词文本；更新时省略会清空
+        arrange_plugin:
+          type: [string, "null"]
+          maxLength: 64
+          pattern: '^$|^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'
+          description: 重排插件标识，例如 article-arranger；创建时省略或 null 使用默认排版，更新时省略或 null 保留原值，空字符串清除设置。读取快照时无设置返回空字符串。沿用文章权限、版本校验和修订记录，不改变分类或发布状态
         digest:
           type:
             - string

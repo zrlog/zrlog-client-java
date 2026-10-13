@@ -24,6 +24,38 @@ class OpenApiHttpTest {
     @BeforeEach void start() throws Exception { server = new MockWebServer(); server.start(); }
     @AfterEach void stop() throws Exception { server.shutdown(); }
 
+    @Test void sendsAgentForAnonymousOperationsAndIncludesItInDryRunWithoutCredentials() throws Exception {
+        Path spec = spec("/public", "get", """
+                operationId: readPublic
+                responses:
+                  '200':
+                    description: public response
+                    content:
+                      application/json:
+                        schema: {type: object}
+                """);
+        Application app = application();
+        app.tokenValue = null;
+        Captured preview = run(app, "api", "--spec", spec.toString(), "call", "readPublic", "--agent", "muse", "--dry-run");
+        assertEquals(0, preview.status, preview.err);
+        assertEquals(BuildInfo.USER_AGENT + " muse", JsonParser.parseString(preview.out).getAsJsonObject()
+                .getAsJsonObject("headers").get("User-Agent").getAsString());
+        assertEquals(0, server.getRequestCount());
+        server.enqueue(json("{}"));
+        Captured result = run(app, "api", "--spec", spec.toString(), "call", "readPublic", "--agent", "muse");
+        assertEquals(0, result.status, result.err);
+        var request = server.takeRequest();
+        assertEquals(BuildInfo.USER_AGENT + " muse", request.getHeader("User-Agent"));
+        assertNull(request.getHeader("Authorization"));
+        assertNull(request.getHeader("X-ZrLog-Admin-Token"));
+    }
+
+    @Test void rejectsInvalidAgentBeforeSending() {
+        Captured result = run(application(), "api", "call", "listCategories", "--agent-name", "dot\r\nX-Test: yes");
+        assertEquals(3, result.status, result.err);
+        assertEquals(0, server.getRequestCount());
+    }
+
     @Test void listsAndDescribesBundledContractsWithoutSiteOrLogin() {
         Application app = application(); app.site = null; app.tokenValue = null;
         Captured catalog = run(app, "api", "sources");
@@ -37,7 +69,7 @@ class OpenApiHttpTest {
         }
         Captured listed = run(app, "api", "list");
         assertEquals(0, listed.status, listed.err);
-        assertEquals(14, JsonParser.parseString(listed.out).getAsJsonArray().size());
+        assertEquals(17, JsonParser.parseString(listed.out).getAsJsonArray().size());
         for (String operation : List.of("listNavigation", "createNavigation", "updateNavigation", "deleteNavigation")) {
             Captured navigation = run(app, "api", "describe", operation);
             assertEquals(0, navigation.status, navigation.err);

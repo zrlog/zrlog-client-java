@@ -30,7 +30,11 @@ def main():
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             requests.append((self.command, self.path, dict(self.headers), body))
             self.send_response(200)
-            if self.path.endswith("/stream"):
+            if self.path.endswith("/api/admin/upgrade/doUpgrade"):
+                data = (b'event: upgrade-progress\ndata: {"stage":"download","status":"running","message":"Downloading"}\n\n'
+                        b'event: response\ndata: {"error":0,"data":{"finish":true,"message":"Restart ZrLog"}}\n\n')
+                content_type = "text/event-stream"
+            elif self.path.endswith("/stream"):
                 data = b"event: progress\ndata: native\n\nevent: done\ndata: {}\n\n"
                 content_type = "text/event-stream"
             elif self.path.endswith("/incomplete"):
@@ -48,6 +52,10 @@ def main():
                     payload["data"] = {"rows": [{"id": 7, "navName": "Archive", "url": "/archive", "icon": "book", "sort": 5}]}
                 elif self.path.startswith("/sub/api/admin/nav/delete"):
                     payload["data"] = {"delete": True}
+                elif self.path == "/sub/api/admin/upgrade":
+                    payload["data"] = {"upgrade": True, "onlineUpgradable": True,
+                                       "version": {"version": "4.0.1", "buildId": "native-build"},
+                                       "backupProtection": {"ready": True, "status": "READY"}}
                 data = json.dumps(payload).encode()
                 content_type = "application/json"
             self.send_header("Content-Type", content_type)
@@ -79,7 +87,7 @@ def main():
 
             sources = json.loads(run("api", "sources").stdout)
             assert {source["id"] for source in sources} == {"admin-web", "blog-web", "plugin-core"}
-            assert len(json.loads(run("api", "list").stdout)) == 14
+            assert len(json.loads(run("api", "list").stdout)) == 17
             assert len(json.loads(run("api", "list", "--source", "blog-web").stdout)) == 5
             article = {"title": "Native draft", "typeId": 1, "canComment": True, "privacy": False,
                        "recommended": False, "rubbish": True, "markdown": None}
@@ -160,7 +168,20 @@ def main():
             assert requests[-1][1] == "/sub/api/admin/nav/delete?id=7,8"
             run("--token", token, "nav", "delete", "0", status=3)
             assert len(requests) == 13, requests
-            print("Native OpenAPI checks passed: catalog, runtime operations, schemas, auth, SSE, category/media/theme/nav commands")
+            check = json.loads(run("--token", token, "upgrade", "check").stdout)
+            assert check["version"]["buildId"] == "native-build"
+            assert check["backupProtection"]["status"] == "READY"
+            previous = len(requests)
+            run("--token", token, "upgrade", "apply", status=2)
+            assert len(requests) == previous
+            upgraded = run("--token", token, "upgrade", "apply", "--accept-risk")
+            assert json.loads(upgraded.stdout) == {"finish": True, "message": "Restart ZrLog"}
+            assert "upgrade-progress" in upgraded.stderr
+            assert requests[-1][1] == "/sub/api/admin/upgrade/doUpgrade"
+            assert json.loads(requests[-1][3]) == {"upgradeRiskAccepted": True}
+            run("api", "call", "executeZrLogUpgrade", "--body", '{"upgradeRiskAccepted":false}', "--dry-run", status=3)
+            assert len(requests) == 16, requests
+            print("Native OpenAPI checks passed: catalog, runtime operations, schemas, auth, SSE, category/media/theme/nav/upgrade commands")
     finally:
         server.shutdown()
         server.server_close()
