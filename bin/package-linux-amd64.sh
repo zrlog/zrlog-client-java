@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: $0 OUTPUT_ROOT" >&2
+if [[ $# -lt 1 || $# -gt 2 || ( $# -eq 2 && "$2" != "--prepare-only" ) ]]; then
+  echo "usage: $0 OUTPUT_ROOT [--prepare-only]" >&2
   exit 1
 fi
 output_root=$1
@@ -58,27 +58,21 @@ binary_name=zrlogctl-linux-amd64
   -Pnative \
   clean package
 
-python3 bin/test-native-openapi.py target/zrlogctl
-python3 bin/test-native-proxy.py target/zrlogctl
-
 mkdir -p "${version_root}"
 install -m 755 target/zrlogctl "${version_root}/${binary_name}"
-install -m 755 bin/install.sh "${output_root%/}/ctl/install.sh"
-(
-  cd "${version_root}"
-  sha256sum "${binary_name}" > "${binary_name}.sha256"
-)
 
-checksum=$(awk '{print $1}' "${version_root}/${binary_name}.sha256")
-size=$(stat -c '%s' "${version_root}/${binary_name}")
-cat > "${release_root}/latest.json" <<EOF
-{
-  "version": "${release_version}",
-  "url": "https://dl.zrlog.com/ctl/release/${release_version}/${binary_name}",
-  "sha256": "${checksum}",
-  "size": ${size}
-}
-EOF
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  {
+    echo "artifact_file=${version_root}/${binary_name}"
+    echo "artifact_name=zrlogctl"
+    echo "artifact_version=${release_version}"
+    echo "artifact_architecture=Linux-amd64"
+  } >> "${GITHUB_OUTPUT}"
+fi
 
-"${version_root}/${binary_name}" --version
-echo "release files: ${release_root}"
+if [[ "${2:-}" == "--prepare-only" ]]; then
+  echo "binary ready for processing: ${version_root}/${binary_name}"
+  exit 0
+fi
+
+bash bin/finalize-linux-amd64.sh "${output_root}" "${release_version}"

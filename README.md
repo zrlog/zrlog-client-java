@@ -367,10 +367,12 @@ zrlogctl update apply
 ./bin/package-linux-amd64.sh /tmp/zrlogctl-release
 ```
 
-打包脚本在生成发布文件前运行 `python3 bin/test-native-openapi.py target/zrlogctl`，验证内置契约、编译后新增接口的运行时调用、Schema 校验、参数编码、认证、上传与 SSE；随后运行 `python3 bin/test-native-proxy.py target/zrlogctl`。代理测试启动本机认证代理和 IPv4 HTTPS 服务，实际运行 `article list` 和 `update check`，覆盖 IPv4、IPv6 字面量、仅解析到 IPv6 的代理主机名、IPv4 排在前面的双地址代理、首次 CONNECT 认证、代理凭据隔离及死端口禁止回退直连。双地址测试让 IPv4 监听器返回策略明文，要求请求只到达正常转发的 IPv6 监听器。证书和 hosts 文件均为临时测试数据，不依赖外部网络或真实令牌。
+打包脚本通过 `bin/finalize-linux-amd64.sh` 在生成发布清单前，对发布目录中的最终二进制运行 `bin/test-native-openapi.py` 和 `bin/test-native-proxy.py`。前者验证内置契约、编译后新增接口的运行时调用、Schema 校验、参数编码、认证、上传与 SSE。代理测试启动本机认证代理和 IPv4 HTTPS 服务，实际运行 `article list` 和 `update check`，覆盖 IPv4、IPv6 字面量、仅解析到 IPv6 的代理主机名、IPv4 排在前面的双地址代理、首次 CONNECT 认证、代理凭据隔离及死端口禁止回退直连。双地址测试让 IPv4 监听器返回策略明文，要求请求只到达正常转发的 IPv6 监听器。证书和 hosts 文件均为临时测试数据，不依赖外部网络或真实令牌。
 
 TLS 测试在原生编译后生成新的 CA 和签发证书，通过运行时 PEM 目录或证书包建立信任，不使用 Java truststore 文件。测试服务优先提供 HTTP/2，验证客户端仍使用 HTTP/1.1，并确认不可信 CA、错误主机名和过期证书均被拒绝。
 
 版本由 `pom.xml` 的 `0.1` 基础版本和构建号组成，例如 `0.1.42`。脚本优先读取 `BUILD_NUMBER`，本地未设置时使用 Git 提交数；CI 使用 GitHub Actions run number。脚本拒绝非 Linux AMD64 平台，并生成可以直接同步到下载站的 `ctl/release` 目录。项目不构建或分发通用 Jar。
+
+Linux 发布 workflow 使用 `--prepare-only` 先编译并暂存二进制，再通过固定到 `v1.0.1` 完整提交 SHA 的 [zrlog-process-artifact](https://github.com/zrlog/zrlog-process-artifact) Action 调用 `https://webdav.zrlog.com/artifact` 处理服务。处理完成后，`bin/finalize-linux-amd64.sh OUTPUT_ROOT RELEASE_VERSION` 验证处理后的可执行文件，并生成对应的 SHA-256、文件大小和 `latest.json`，随后进行构建证明与上传。处理或验证失败会终止发布。仓库需要配置 `ARTIFACT_SERVICE_TOKEN` Actions Secret；服务调用、结果校验与故障处理见 Action 仓库 README。本地默认打包命令直接验证并生成发布目录；分阶段调用时，必须在处理完成后运行 finalize 脚本。
 
 OpenAPI 契约统一维护于 [zrlog-api](https://github.com/zrlog/zrlog-api)。`zrlogctl api sources` 列出内置契约，`api list` 索引操作，`api describe <operationId>` 查看定义，`api call <operationId>` 直接调用。文章、分类、上传及通知便捷命令也通过同一契约执行器发送请求。同步方式见 [OpenAPI 文档](docs/openapi.md)。
